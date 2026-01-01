@@ -1,0 +1,13 @@
+name: file_write
+version: 1.0.0
+description: Write or create a file with given content (overwrites existing)
+safety_flags:
+  - file_system
+  - side_effect
+requires_approval: true
+handler: handler.write_file
+tags:
+  - file-operations
+  - write
+  - filesystem
+  - prepackaged

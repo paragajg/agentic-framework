@@ -1,0 +1,12 @@
+name: file_read
+version: 1.0.0
+description: Read contents of a file from the filesystem with optional line range and line numbers
+safety_flags:
+  - file_system
+requires_approval: false
+handler: handler.read_file
+tags:
+  - file-operations
+  - read
+  - filesystem
+  - prepackaged

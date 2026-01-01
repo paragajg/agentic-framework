@@ -1,0 +1,12 @@
+name: python_exec
+version: 1.0.0
+description: Execute Python code in an isolated environment with timeout protection
+safety_flags:
+  - side_effect
+  - external_call
+requires_approval: true
+handler: handler.execute_python
+tags:
+  - execution
+  - python
+  - prepackaged

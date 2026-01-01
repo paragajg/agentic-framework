@@ -1,0 +1,28 @@
+name: deep_research
+version: 1.0.0
+description: Conduct comprehensive web research with source fetching, content extraction, and synthesis preparation
+safety_flags:
+  - external_call
+  - network_access
+requires_approval: false
+handler: handler.deep_research
+tags:
+  - research
+  - web
+  - analysis
+  - reports
+  - synthesis
+anthropic_compatible: true
+dependencies:
+  - requests>=2.28.0
+  - beautifulsoup4>=4.11.0
+
+# Environment variable configuration
+config:
+  min_sources_env: DEEP_RESEARCH_MIN_SOURCES
+  max_sources_env: DEEP_RESEARCH_MAX_SOURCES
+  search_results_env: DEEP_RESEARCH_SEARCH_RESULTS
+  defaults:
+    min_sources: 10
+    max_sources: 15
+    search_results: 20

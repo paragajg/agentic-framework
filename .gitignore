@@ -1,0 +1,102 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+artifacts/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.db
+*.sqlite
+
+# Secrets
+secrets/
+*.pem
+*.key
+
+# User-specific configs
+.agentctl/
+
+# Generated reports
+reports/
+artifacts/*.json
+artifacts/*.yaml
+!artifacts/README.md
+
+# Data files
+*.csv
+*.xlsx
+*.xls
+
+# Temporary test files in root
+/test_*.py
+/test_*.sh
+
+# Local development
+docker-compose.override.yml
+.vscode/settings.json
+
+# Documentation builds
+docs/_build/
+docs/.doctrees/
+site/
+
+# Jupyter notebooks
+*.ipynb_checkpoints/
+*.ipynb
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff
+.ruff_cache/
