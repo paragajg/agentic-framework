@@ -14,6 +14,7 @@
 - [Key Concepts](#-key-concepts)
 - [Features](#-features)
 - [Quick Start](#-quick-start)
+- [CLI Usage Guide](#-cli-usage-guide)
 - [Multi-Agent Patterns](#-multi-agent-patterns)
 - [LLM Provider Support](#-llm-provider-support)
 - [Examples](#-examples)
@@ -426,6 +427,81 @@ steps:
 agentctl manifest run manifests/my-workflow.yaml \
   --input "Analyze the impact of multi-agent systems on enterprise AI"
 ```
+
+## 🎮 CLI Usage Guide
+
+The `agentctl` CLI is the primary interface for building and managing agents. It provides an interactive, guided experience for:
+
+- **Agent Creation**: Build agents without writing code
+- **Workflow Design**: Create multi-step workflows interactively
+- **LLM Configuration**: Switch between 6 providers seamlessly
+- **Skill Development**: Scaffold skills with validation
+- **MCP Integration**: Add external tools with guided setup
+- **Deep Research**: Use as a research platform with multi-agent orchestration
+
+### Quick CLI Examples
+
+**Interactive Mode:**
+```bash
+# Launch interactive CLI
+agentctl
+
+# You'll see:
+> _
+
+# Try these commands:
+> /agent new my-agent          # Create an agent
+> /skill new my-skill          # Create a skill
+> /manifest new                # Create a workflow
+> /llm config                  # Configure LLM
+> /mcp add github              # Add MCP server
+> /research --mode interactive # Start research session
+```
+
+**Direct Commands:**
+```bash
+# Create agent in one line
+agentctl agent new research-agent --role research --capabilities web_search,summarize
+
+# Run workflow
+agentctl manifest run manifests/my-workflow.yaml --input "Your query here"
+
+# Test LLM connection
+agentctl llm test
+
+# List available skills
+agentctl skill list
+```
+
+### Interactive Research Platform
+
+Use `agentctl` as a deep research platform:
+
+```bash
+> /research --mode interactive
+
+research> /query "Latest trends in multi-agent AI systems"
+
+# Multi-phase research:
+# 1. Initial search (web, academic, code repos)
+# 2. Confidence-based deep dive
+# 3. Fact verification
+# 4. Progressive report building
+
+research> /refine "game-theoretic approaches"
+research> /verify
+research> /sources
+research> /export markdown
+```
+
+### Complete Guide
+
+📖 **[Read the full CLI Usage Guide](docs/cli-usage.md)** for:
+- 10 complete interactive sessions (beginner → advanced)
+- Deep research platform tutorial (42-minute example)
+- Parallel workflow orchestration
+- Complete command reference (40+ commands)
+- Tips, tricks, and troubleshooting
 
 ## 🎭 Multi-Agent Patterns
 
@@ -899,7 +975,17 @@ Standards:
 
 ## 📞 Support
 
-- **Documentation**: [docs/](docs/)
+### Documentation
+
+- **[CLI Usage Guide](docs/cli-usage.md)** - Interactive CLI tutorial (beginner → advanced)
+- **[API Reference](docs/api-reference.md)** - Complete API documentation
+- **[Workflow Manifests](docs/manifests.md)** - YAML workflow guide
+- **[Skills Development](docs/skills.md)** - Creating custom skills
+- **[MCP Integration](docs/mcp.md)** - External tool integration
+- **[Examples](examples/)** - Working code examples
+
+### Community & Support
+
 - **Issues**: [GitHub Issues](https://github.com/paragajg/agentic-framework/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/paragajg/agentic-framework/discussions)
 - **Email**: dev@agentic-framework.org
