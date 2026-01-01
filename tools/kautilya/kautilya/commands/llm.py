@@ -255,40 +255,90 @@ def test_llm_connection(config_dir: str) -> None:
     """
     Test LLM connection.
 
+    Checks configuration from multiple sources:
+    1. .kautilya/llm.yaml config file
+    2. .env file (OPENAI_API_KEY, OPENAI_MODEL)
+    3. Environment variables
+
     Args:
         config_dir: Configuration directory
     """
+    import os
+
     console.print("\n[bold cyan]Testing LLM Connection[/bold cyan]\n")
 
     llm_config = load_llm_config(config_dir)
 
-    if not llm_config or "providers" not in llm_config:
-        console.print("[yellow]No LLM providers configured. Run /llm config first.[/yellow]")
+    # Check if we have providers in config file
+    if llm_config and "providers" in llm_config:
+        default_provider = llm_config.get("default_provider", "anthropic")
+        provider_config = llm_config["providers"].get(default_provider)
+
+        if provider_config:
+            api_key_env = provider_config.get("api_key_env")
+            api_key = os.getenv(api_key_env, "")
+
+            if not api_key and default_provider != "local":
+                console.print(
+                    f"[red]✗[/red] API key not found in environment variable ${api_key_env}"
+                )
+                return
+
+            console.print(f"[green]✓[/green] Config Source: {config_dir}/llm.yaml")
+            console.print(f"[green]✓[/green] Provider: {default_provider}")
+            console.print(f"[green]✓[/green] Model: {provider_config.get('default_model')}")
+            console.print(f"[green]✓[/green] API Key: ${api_key_env} {'(set)' if api_key else '(not set)'}")
+            console.print("\n[dim]Note: Full connection test not yet implemented[/dim]")
+            return
+
+    # Fallback: Check .env file for OpenAI configuration
+    openai_key = os.getenv("OPENAI_API_KEY")
+    openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+    if openai_key:
+        console.print(f"[green]✓[/green] Config Source: .env file")
+        console.print(f"[green]✓[/green] Provider: openai")
+        console.print(f"[green]✓[/green] Model: {openai_model}")
+        console.print(f"[green]✓[/green] API Key: $OPENAI_API_KEY (set, {len(openai_key)} chars)")
+
+        # Try to actually test the connection
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=openai_key)
+            # Quick test with minimal tokens
+            # Use max_completion_tokens for reasoning models (o1, o3, gpt-5)
+            is_reasoning_model = any(
+                openai_model.startswith(prefix)
+                for prefix in ("o1", "o3", "o4", "gpt-5")
+            )
+            if is_reasoning_model:
+                response = client.chat.completions.create(
+                    model=openai_model,
+                    messages=[{"role": "user", "content": "Hi"}],
+                    max_completion_tokens=10,
+                )
+            else:
+                response = client.chat.completions.create(
+                    model=openai_model,
+                    messages=[{"role": "user", "content": "Hi"}],
+                    max_tokens=5,
+                )
+            console.print(f"[green]✓[/green] Connection: Successfully connected!")
+            console.print(f"[dim]  Response: {response.choices[0].message.content}[/dim]")
+        except Exception as e:
+            console.print(f"[yellow]⚠[/yellow] Connection test failed: {e}")
+
+        console.print("\n[dim]Tip: Run '/llm config' to create a config file with more options.[/dim]")
         return
 
-    default_provider = llm_config.get("default_provider", "anthropic")
-    provider_config = llm_config["providers"].get(default_provider)
-
-    if not provider_config:
-        console.print(f"[yellow]Provider {default_provider} not configured.[/yellow]")
-        return
-
-    import os
-
-    api_key_env = provider_config.get("api_key_env")
-    api_key = os.getenv(api_key_env, "")
-
-    if not api_key and default_provider != "local":
-        console.print(
-            f"[red]✗[/red] API key not found in environment variable ${api_key_env}"
-        )
-        return
-
-    # TODO: Actually test the connection with a simple API call
-    console.print(f"[green]✓[/green] Provider: {default_provider}")
-    console.print(f"[green]✓[/green] Model: {provider_config.get('default_model')}")
-    console.print(f"[green]✓[/green] API Key: ${api_key_env} {'(set)' if api_key else '(not set)'}")
-    console.print("\n[dim]Note: Full connection test not yet implemented[/dim]")
+    # No configuration found
+    console.print("[yellow]No LLM configuration found.[/yellow]")
+    console.print("\n[bold]To configure LLM, either:[/bold]")
+    console.print("  1. Set OPENAI_API_KEY in your .env file")
+    console.print("  2. Run '/llm config' to configure providers")
+    console.print("\n[dim]Example .env:[/dim]")
+    console.print("  OPENAI_API_KEY=sk-...")
+    console.print("  OPENAI_MODEL=gpt-4o-mini")
 
 
 def _select_model_for_provider(provider: str) -> str:

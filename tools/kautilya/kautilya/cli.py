@@ -14,13 +14,31 @@ from rich.text import Text
 from dotenv import load_dotenv
 from pathlib import Path
 
-# Load environment variables from parent .env file
-# This ensures all commands have access to env vars (API keys, etc.)
-parent_env = Path(__file__).parent.parent.parent / ".env"
-if parent_env.exists():
-    load_dotenv(parent_env, override=False)
-# Also try current directory and parents
-load_dotenv(override=False)
+# Load environment variables from .env file
+# Search upward from this file's location to find project root .env
+def _find_project_env() -> Optional[Path]:
+    """Find .env file by searching upward from this file's location."""
+    current = Path(__file__).resolve().parent
+
+    # Search upward up to 10 levels
+    for _ in range(10):
+        env_path = current / ".env"
+        if env_path.exists():
+            return env_path
+
+        parent = current.parent
+        if parent == current:
+            break  # Reached filesystem root
+        current = parent
+
+    return None
+
+_env_path = _find_project_env()
+if _env_path:
+    load_dotenv(_env_path, override=False)
+else:
+    # Fallback: try default load_dotenv behavior (CWD)
+    load_dotenv(override=False)
 
 from .interactive import InteractiveMode
 from .config import Config, load_config

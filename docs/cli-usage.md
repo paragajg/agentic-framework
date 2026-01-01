@@ -50,18 +50,29 @@ Build a complete multi-agent research workflow in minutes, not hours.
 # Python 3.11+
 python --version
 
-# Install uv (fast package manager)
+# Install uv (fast package manager - recommended)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 ### Install Kautilya
 
-**Option 1: Global Installation**
+Kautilya is automatically installed with the Agentic Framework.
+
+**Option 1: Install Full Framework (Recommended)**
 ```bash
-uv pip install kautilya
+git clone https://github.com/paragajg/agentic-framework.git
+cd agentic-framework
+
+# Create virtual environment and install
+uv venv --python 3.11
+source .venv/bin/activate
+uv pip install -e .
+
+# Kautilya is now available!
+kautilya --version
 ```
 
-**Option 2: From Source**
+**Option 2: Install Kautilya Only**
 ```bash
 git clone https://github.com/paragajg/agentic-framework.git
 cd agentic-framework
@@ -71,7 +82,29 @@ uv pip install -e tools/kautilya/
 **Verify Installation:**
 ```bash
 kautilya --version
-# Output: kautilya v1.0.0
+# Output: Kautilya v1.0.0
+```
+
+### Set Up LLM Provider
+
+Create a `.env` file in your project root:
+```bash
+# Copy example and edit
+cp .env.example .env
+
+# Add your API key (choose one):
+# For OpenAI:
+OPENAI_API_KEY=sk-your-key-here
+OPENAI_MODEL=gpt-4o-mini
+
+# For Anthropic:
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+```
+
+Test the connection:
+```bash
+kautilya llm test
+# Output: ✓ Connection: Successfully connected!
 ```
 
 ## Getting Started

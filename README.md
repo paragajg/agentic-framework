@@ -274,7 +274,25 @@ Full audit trail for every artifact:
 
 ### Step 1: Installation
 
-**Option A: Install from GitHub (Recommended)**
+**Option A: Install from Source (Recommended)**
+```bash
+# Clone repository
+git clone https://github.com/paragajg/agentic-framework.git
+cd agentic-framework
+
+# Create virtual environment with uv (fast) or venv
+# Using uv (recommended - faster):
+uv venv --python 3.11
+source .venv/bin/activate
+uv pip install -e .
+
+# Or using standard venv:
+python3.11 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install -e .
+```
+
+**Option B: Install from GitHub (pip only)**
 ```bash
 # Install latest release
 pip install git+https://github.com/paragajg/agentic-framework.git@v1.0.0
@@ -283,22 +301,25 @@ pip install git+https://github.com/paragajg/agentic-framework.git@v1.0.0
 pip install git+https://github.com/paragajg/agentic-framework.git
 ```
 
-**Option B: Install from Source (for development)**
-```bash
-# Clone repository
-git clone https://github.com/paragajg/agentic-framework.git
-cd agentic-framework
-
-# Create virtual environment
-python3.11 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install in editable mode
-pip install -e .
-```
+> **Note**: The `kautilya` CLI tool is automatically installed with the framework. No separate installation needed.
 
 ### Step 2: Set Up LLM Provider
 
+Create a `.env` file in the project root (recommended):
+```bash
+# Copy the example and edit
+cp .env.example .env
+
+# Edit .env with your API key:
+# For OpenAI:
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
+
+# For Anthropic:
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Or export environment variables directly:
 ```bash
 # Choose one provider:
 
