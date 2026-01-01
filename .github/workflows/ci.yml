@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install black mypy ruff
+          pip install -r requirements.txt
+
+      - name: Run Black
+        run: black --check --line-length 100 .
+
+      - name: Run Ruff
+        run: ruff check .
+
+      - name: Run MyPy
+        run: mypy --strict orchestrator subagent-manager memory-service mcp-gateway code-exec adapters
+
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_pass
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run tests with coverage
+        env:
+          POSTGRES_URL: postgresql://test_user:test_pass@localhost:5432/test_db
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          pytest --cov=. --cov-report=xml --cov-report=html
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Bandit security checks
+        run: |
+          pip install bandit
+          bandit -r orchestrator subagent-manager memory-service mcp-gateway code-exec adapters
+
+      - name: Run Safety check
+        run: |
+          pip install safety
+          safety check --file requirements.txt
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build orchestrator
+        run: docker build -f orchestrator/Dockerfile -t orchestrator:test .
+
+      - name: Build memory-service
+        run: docker build -f memory-service/Dockerfile -t memory-service:test .
+
+      - name: Build mcp-gateway
+        run: docker build -f mcp-gateway/Dockerfile -t mcp-gateway:test .
+
+      - name: Build subagent-manager
+        run: docker build -f subagent-manager/Dockerfile -t subagent-manager:test .
+
+      - name: Build skill-executor
+        run: docker build -f code-exec/Dockerfile -t skill-executor:test .
