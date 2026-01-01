@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rate limiting and audit logging
 - Tool invocation via HTTP gateway
 
-#### CLI Tool (agentctl)
+#### CLI Tool (kautilya)
 - Agent creation and management
 - Skill scaffolding and import
 - LLM configuration

@@ -298,4 +298,4 @@ result = await agent.invoke_tool(
 - Configure authentication: Set environment variables
 - Browse MCP catalog: https://mcp-registry.example.com
 - Read MCP specification: https://modelcontextprotocol.io
-- See tools/agentctl/ for MCP management commands
+- See tools/kautilya/ for MCP management commands

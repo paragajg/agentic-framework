@@ -130,7 +130,7 @@ class MCPClientBase(ABC):
                     "tools": {}
                 },
                 "clientInfo": {
-                    "name": "agentctl-gateway",
+                    "name": "kautilya-gateway",
                     "version": "1.0.0"
                 }
             }

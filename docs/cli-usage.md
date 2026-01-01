@@ -1,6 +1,6 @@
-# AgentCtl CLI Usage Guide
+# Kautilya CLI Usage Guide
 
-Complete guide to using `agentctl` - the interactive CLI for building and managing agentic workflows.
+Complete guide to using `kautilya` - the interactive CLI for building and managing agentic workflows.
 
 ## Table of Contents
 
@@ -17,7 +17,7 @@ Complete guide to using `agentctl` - the interactive CLI for building and managi
 
 ## Overview
 
-`agentctl` is an interactive CLI that lets you:
+`kautilya` is an interactive CLI that lets you:
 
 - **Build agents** without writing code
 - **Configure LLMs** from 6 different providers
@@ -27,11 +27,11 @@ Complete guide to using `agentctl` - the interactive CLI for building and managi
 - **Run research** using multi-agent orchestration
 - **Monitor execution** in real-time
 
-### Why Use AgentCtl?
+### Why Use Kautilya?
 
 **Interactive Development:**
 ```
-Traditional Approach          AgentCtl Approach
+Traditional Approach          Kautilya Approach
 ───────────────────          ─────────────────
 Write Python code       →    Describe in CLI
 Create YAML files       →    Guided prompts
@@ -54,24 +54,24 @@ python --version
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### Install AgentCtl
+### Install Kautilya
 
 **Option 1: Global Installation**
 ```bash
-uv pip install agentctl
+uv pip install kautilya
 ```
 
 **Option 2: From Source**
 ```bash
 git clone https://github.com/paragajg/agentic-framework.git
 cd agentic-framework
-uv pip install -e tools/agentctl/
+uv pip install -e tools/kautilya/
 ```
 
 **Verify Installation:**
 ```bash
-agentctl --version
-# Output: agentctl v1.0.0
+kautilya --version
+# Output: kautilya v1.0.0
 ```
 
 ## Getting Started
@@ -80,22 +80,22 @@ agentctl --version
 
 ```bash
 # Start interactive session
-agentctl
+kautilya
 
 # Or run single command
-agentctl agent new my-agent --role research
+kautilya agent new my-agent --role research
 ```
 
 ### First Launch Experience
 
 ```
-$ agentctl
+$ kautilya
 ┌─────────────────────────────────────────────────┐
-│  AgentCtl v1.0 - Agentic Framework CLI          │
+│  Kautilya v1.0 - Agentic Framework CLI          │
 │  Type /help for commands, or describe your task │
 └─────────────────────────────────────────────────┘
 
-Welcome to AgentCtl! Let's get you started.
+Welcome to Kautilya! Let's get you started.
 
 ? Do you have an existing project? (y/N): N
 
@@ -125,7 +125,7 @@ Great! Let's create a new agent project.
 
 Next steps:
   1. cd research-assistant
-  2. agentctl
+  2. kautilya
   3. Type /agent new to create your first agent
 
 > _
@@ -137,7 +137,7 @@ After initialization:
 
 ```
 research-assistant/
-├── .agentctl/
+├── .kautilya/
 │   ├── config.yaml          # Project settings
 │   └── llm.yaml             # LLM configurations
 ├── agents/                  # Agent definitions
@@ -269,7 +269,7 @@ Current Providers:
 ✓ Account: user@example.com
 ✓ Rate limit: 50 req/min
 
-Configuration saved to .agentctl/llm.yaml
+Configuration saved to .kautilya/llm.yaml
 
 > Test LLM: /llm test
 > List models: /llm list
@@ -1257,7 +1257,7 @@ Test the orchestration:
 
 ## Deep Research Platform
 
-The AgentCtl CLI can function as a powerful deep research platform, orchestrating multiple agents to conduct comprehensive research.
+The Kautilya CLI can function as a powerful deep research platform, orchestrating multiple agents to conduct comprehensive research.
 
 ### Research Mode Features
 
@@ -1515,9 +1515,9 @@ Sessions auto-save and can be resumed:
 > /quit
 
 # Resume later
-$ agentctl --resume last
+$ kautilya --resume last
 # or
-$ agentctl --resume session_abc123
+$ kautilya --resume session_abc123
 ```
 
 ### 6. Batch Mode
@@ -1525,7 +1525,7 @@ $ agentctl --resume session_abc123
 Run multiple commands from file:
 
 ```bash
-$ agentctl --batch commands.txt
+$ kautilya --batch commands.txt
 
 # commands.txt:
 /agent new research-agent --role research
@@ -1547,11 +1547,11 @@ Save command output:
 Configure via environment:
 
 ```bash
-export AGENTCTL_EDITOR=code
-export AGENTCTL_LLM_PROVIDER=anthropic
-export AGENTCTL_AUTO_SAVE=true
+export KAUTILYA_EDITOR=code
+export KAUTILYA_LLM_PROVIDER=anthropic
+export KAUTILYA_AUTO_SAVE=true
 
-agentctl
+kautilya
 ```
 
 ## Troubleshooting
@@ -1640,7 +1640,7 @@ Enable debug logging:
 > /logs --follow
 
 # Or run with debug flag
-$ agentctl --debug
+$ kautilya --debug
 ```
 
 ### Getting Help

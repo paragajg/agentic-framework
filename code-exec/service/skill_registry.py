@@ -10,7 +10,7 @@ Provides auto-discovery of skills from multiple paths by scanning for:
 Supports:
 - Framework-level skills (code-exec/skills/)
 - Project-level skills (./skills)
-- User-level skills (~/.agentctl/skills/)
+- User-level skills (~/.kautilya/skills/)
 - Custom paths via environment variable or config
 """
 
@@ -134,10 +134,10 @@ class SkillRegistry:
     - skill.yaml (Native format)
 
     Supports multiple skill locations with priority:
-    1. Environment variable: AGENTCTL_SKILLS_PATH (colon-separated)
+    1. Environment variable: KAUTILYA_SKILLS_PATH (colon-separated)
     2. Project-level: ./skills
     3. Framework-level: {framework_root}/code-exec/skills
-    4. User-level: ~/.agentctl/skills
+    4. User-level: ~/.kautilya/skills
 
     Usage:
         registry = SkillRegistry()
@@ -205,15 +205,15 @@ class SkillRegistry:
         Get default skill paths with priority ordering.
 
         Priority:
-        1. AGENTCTL_SKILLS_PATH environment variable
+        1. KAUTILYA_SKILLS_PATH environment variable
         2. Project-level ./skills
         3. Framework-level code-exec/skills
-        4. User-level ~/.agentctl/skills
+        4. User-level ~/.kautilya/skills
         """
         paths: List[Path] = []
 
         # 1. Environment variable (highest priority)
-        env_paths = os.getenv("AGENTCTL_SKILLS_PATH", "")
+        env_paths = os.getenv("KAUTILYA_SKILLS_PATH", "")
         if env_paths:
             for p in env_paths.split(":"):
                 path = Path(p.strip()).resolve()
@@ -235,8 +235,8 @@ class SkillRegistry:
                 paths.append(framework_skills)
                 logger.debug(f"Added framework skill path: {framework_skills}")
 
-        # 4. User-level skills (~/.agentctl/skills)
-        user_skills = Path.home() / ".agentctl" / "skills"
+        # 4. User-level skills (~/.kautilya/skills)
+        user_skills = Path.home() / ".kautilya" / "skills"
         if user_skills.exists() and user_skills not in paths:
             paths.append(user_skills)
             logger.debug(f"Added user skill path: {user_skills}")

@@ -976,8 +976,8 @@ Error: MCP_TOOL_NOT_FOUND: Tool 'github.invalid_tool' not found in catalog
 
 **Solution:**
 - Check tool name spelling
-- Refresh catalog: `agentctl mcp refresh-catalog`
-- Verify server is running: `agentctl mcp test github`
+- Refresh catalog: `kautilya mcp refresh-catalog`
+- Verify server is running: `kautilya mcp test github`
 
 **5. Timeout Errors**
 
@@ -1006,13 +1006,13 @@ Test MCP connection:
 
 ```bash
 # Test server connectivity
-agentctl mcp test github
+kautilya mcp test github
 
 # List available tools
-agentctl mcp list github
+kautilya mcp list github
 
 # Invoke tool manually
-agentctl mcp invoke github search_repos '{"query": "test"}'
+kautilya mcp invoke github search_repos '{"query": "test"}'
 ```
 
 ## See Also

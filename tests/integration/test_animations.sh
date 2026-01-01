@@ -4,7 +4,7 @@
 
 set -e
 
-echo "🎨 AgentCtl Animation Test Suite"
+echo "🎨 Kautilya Animation Test Suite"
 echo "================================"
 echo ""
 
@@ -39,14 +39,14 @@ case $choice in
         echo "Running full animation demo..."
         echo "This will show all animations in sequence."
         echo ""
-        python -m agentctl.animations_demo
+        python -m kautilya.animations_demo
         ;;
     2)
         echo ""
         echo "Testing Welcome Screen..."
         python -c "
 from rich.console import Console
-from agentctl.animations import WelcomeScreen
+from kautilya.animations import WelcomeScreen
 
 console = Console()
 WelcomeScreen.show(
@@ -63,7 +63,7 @@ WelcomeScreen.show(
         echo "Testing Spinner Collection..."
         python -c "
 from rich.console import Console
-from agentctl.animations import ModernSpinner
+from kautilya.animations import ModernSpinner
 import time
 
 console = Console()
@@ -89,7 +89,7 @@ for spinner_type in spinner_types:
         echo "Testing Tool Execution Visualizer..."
         python -c "
 from rich.console import Console
-from agentctl.animations import ToolExecutionVisualizer
+from kautilya.animations import ToolExecutionVisualizer
 import time
 
 console = Console()
@@ -118,7 +118,7 @@ ToolExecutionVisualizer.show_result(
         echo "Testing Success/Error Celebrations..."
         python -c "
 from rich.console import Console
-from agentctl.animations import Celebration
+from kautilya.animations import Celebration
 import time
 
 console = Console()
@@ -151,7 +151,7 @@ Celebration.error(
         echo "Running quick smoke test..."
         python -c "
 from rich.console import Console
-from agentctl.animations import (
+from kautilya.animations import (
     ModernSpinner,
     GradientText,
     Celebration
@@ -162,7 +162,7 @@ console = Console()
 
 # Test 1: Gradient
 print('Test 1: Gradient Text')
-text = GradientText.apply('AgentCtl - Agentic Framework', gradient='cyberpunk')
+text = GradientText.apply('Kautilya - Agentic Framework', gradient='cyberpunk')
 console.print(text)
 console.print('[green]✓ Gradient OK[/green]\n')
 time.sleep(0.5)
@@ -208,7 +208,7 @@ esac
 echo ""
 echo "✅ Test complete!"
 echo ""
-echo "To run full demo: python -m agentctl.animations_demo"
+echo "To run full demo: python -m kautilya.animations_demo"
 echo "To see docs: less docs/CLI_ANIMATIONS_GUIDE.md"
 echo "To see integration: less ANIMATION_INTEGRATION_EXAMPLE.py"
 echo ""

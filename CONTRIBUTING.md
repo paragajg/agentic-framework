@@ -38,7 +38,7 @@ Thank you for your interest in contributing to the Agentic Framework! This docum
 4. **Verify Installation**
    ```bash
    # Check CLI works
-   agentctl --version
+   kautilya --version
 
    # Run tests
    pytest

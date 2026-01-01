@@ -54,7 +54,7 @@ Issues = "https://github.com/your-org/agentic-framework/issues"
 Changelog = "https://github.com/your-org/agentic-framework/blob/main/CHANGELOG.md"
 
 [project.scripts]
-agentctl = "tools.agentctl.agentctl.cli.main:cli"
+kautilya = "tools.kautilya.kautilya.cli:main"
 
 [project.optional-dependencies]
 dev = [

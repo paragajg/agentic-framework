@@ -21,7 +21,7 @@ from pathlib import Path
 
 # Add project root to path
 project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root / "tools" / "agentctl"))
+sys.path.insert(0, str(project_root / "tools" / "kautilya"))
 
 # Configure logging
 logging.basicConfig(
@@ -29,8 +29,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
-from agentctl.llm_models import ConversationHistory, Message
-from agentctl.llm_validation_enhanced import EnhancedValidator, log_validation_event
+from kautilya.llm_models import ConversationHistory, Message
+from kautilya.llm_validation_enhanced import EnhancedValidator, log_validation_event
 
 
 def print_section(title: str):

@@ -249,7 +249,7 @@ Full audit trail for every artifact:
 - 🎯 **Typed Artifacts**: JSON Schema validated inter-agent communication
 
 ### Developer Experience
-- 🚀 **agentctl CLI**: Interactive agent/workflow management
+- 🚀 **kautilya CLI**: Interactive agent/workflow management
 - 📚 **Rich Examples**: 4+ complete working examples
 - 🧪 **Comprehensive Tests**: 90%+ code coverage
 - 📖 **Extensive Docs**: Architecture, API, guides
@@ -332,11 +332,11 @@ docker-compose up -d
 
 ```bash
 # Check CLI is installed
-agentctl --version
-# Output: agentctl version 1.0.0
+kautilya --version
+# Output: kautilya version 1.0.0
 
 # Test LLM connection
-agentctl llm test
+kautilya llm test
 # Output: ✓ Connected to Anthropic Claude Sonnet 4
 ```
 
@@ -383,7 +383,7 @@ Simple Agent Example
 
 ```bash
 # Create a new workflow
-agentctl manifest new
+kautilya manifest new
 
 # Follow the interactive prompts:
 # ? Manifest name: my-workflow
@@ -424,13 +424,13 @@ steps:
 
 **Run the workflow:**
 ```bash
-agentctl manifest run manifests/my-workflow.yaml \
+kautilya manifest run manifests/my-workflow.yaml \
   --input "Analyze the impact of multi-agent systems on enterprise AI"
 ```
 
 ## 🎮 CLI Usage Guide
 
-The `agentctl` CLI is the primary interface for building and managing agents. It provides an interactive, guided experience for:
+The `kautilya` CLI is the primary interface for building and managing agents. It provides an interactive, guided experience for:
 
 - **Agent Creation**: Build agents without writing code
 - **Workflow Design**: Create multi-step workflows interactively
@@ -444,7 +444,7 @@ The `agentctl` CLI is the primary interface for building and managing agents. It
 **Interactive Mode:**
 ```bash
 # Launch interactive CLI
-agentctl
+kautilya
 
 # You'll see:
 > _
@@ -461,21 +461,21 @@ agentctl
 **Direct Commands:**
 ```bash
 # Create agent in one line
-agentctl agent new research-agent --role research --capabilities web_search,summarize
+kautilya agent new research-agent --role research --capabilities web_search,summarize
 
 # Run workflow
-agentctl manifest run manifests/my-workflow.yaml --input "Your query here"
+kautilya manifest run manifests/my-workflow.yaml --input "Your query here"
 
 # Test LLM connection
-agentctl llm test
+kautilya llm test
 
 # List available skills
-agentctl skill list
+kautilya skill list
 ```
 
 ### Interactive Research Platform
 
-Use `agentctl` as a deep research platform:
+Use `kautilya` as a deep research platform:
 
 ```bash
 > /research --mode interactive
@@ -565,10 +565,10 @@ Product Manager Agent ↔ Engineering Agent ↔ QA Agent
 
 ```bash
 # Configure provider
-agentctl llm config --provider anthropic --model claude-sonnet-4-20250514
+kautilya llm config --provider anthropic --model claude-sonnet-4-20250514
 
 # Or switch at runtime
-agentctl manifest run workflow.yaml --llm-provider openai --llm-model gpt-4o
+kautilya manifest run workflow.yaml --llm-provider openai --llm-model gpt-4o
 ```
 
 ## 🎯 Examples
@@ -711,8 +711,8 @@ agentic-framework/
 │   └── tests/
 │
 ├── tools/                 # CLI utilities
-│   └── agentctl/          # Developer CLI
-│       ├── agentctl/
+│   └── kautilya/          # Developer CLI
+│       ├── kautilya/
 │       │   ├── commands/       # CLI commands
 │       │   ├── memory/         # Memory management
 │       │   └── templates/      # Code generation
@@ -905,7 +905,7 @@ A: The framework itself is MIT-licensed (free). You pay only for:
 ### Technical Questions
 
 **Q: How do I switch LLM providers?**
-A: Use `agentctl llm config --provider <name>` or set environment variables. No code changes needed - all adapters use the same interface.
+A: Use `kautilya llm config --provider <name>` or set environment variables. No code changes needed - all adapters use the same interface.
 
 **Q: What's the difference between Skills and MCP Tools?**
 A: **Skills** are deterministic Python functions you write (e.g., data processing, calculations). **MCP Tools** are external services accessed via Model Context Protocol (e.g., GitHub API, file system, databases).

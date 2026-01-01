@@ -2,7 +2,7 @@
 """
 Simple Validation Test (No Dependencies)
 
-Demonstrates the self-correction capabilities without requiring full agentctl setup.
+Demonstrates the self-correction capabilities without requiring full kautilya setup.
 This shows the core validation logic that prevents production LLM errors.
 """
 
@@ -267,7 +267,7 @@ def main():
 ╔════════════════════════════════════════════════════════════════════╗
 ║  LLM Error Recovery - Validation Test (Standalone)                ║
 ║                                                                    ║
-║  Demonstrating self-correction without full agentctl setup        ║
+║  Demonstrating self-correction without full kautilya setup        ║
 ╚════════════════════════════════════════════════════════════════════╝
     """)
 

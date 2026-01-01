@@ -63,7 +63,7 @@ secrets/
 *.key
 
 # User-specific configs
-.agentctl/
+.kautilya/
 
 # Generated reports
 reports/

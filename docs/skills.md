@@ -573,20 +573,20 @@ my_skill/
 
 ### Creating Hybrid Skills
 
-Use `agentctl` to create hybrid skills:
+Use `kautilya` to create hybrid skills:
 
 ```bash
-agentctl skill new my-skill --format hybrid
+kautilya skill new my-skill --format hybrid
 ```
 
 Or convert existing skills:
 
 ```bash
 # Add Anthropic format to native skill
-agentctl skill convert my-skill --to anthropic --include-handler
+kautilya skill convert my-skill --to anthropic --include-handler
 
 # Add native format to Anthropic skill
-agentctl skill convert my-skill --to native
+kautilya skill convert my-skill --to native
 ```
 
 ## Skill Registry
@@ -774,17 +774,17 @@ Create distributable ZIP:
 
 ```bash
 # Package native skill
-agentctl skill package my-skill --output my-skill-v1.0.0.zip
+kautilya skill package my-skill --output my-skill-v1.0.0.zip
 
 # Package for Anthropic marketplace
-agentctl skill package my-skill --format anthropic --output my-skill-anthropic.zip
+kautilya skill package my-skill --format anthropic --output my-skill-anthropic.zip
 ```
 
 ### Sharing on Anthropic Marketplace
 
 1. **Export skill:**
 ```bash
-agentctl skill export my-skill --format anthropic
+kautilya skill export my-skill --format anthropic
 ```
 
 2. **Validate marketplace requirements:**
@@ -803,17 +803,17 @@ agentctl skill export my-skill --format anthropic
 
 **From ZIP:**
 ```bash
-agentctl skill import my-skill-v1.0.0.zip
+kautilya skill import my-skill-v1.0.0.zip
 ```
 
 **From URL:**
 ```bash
-agentctl skill import https://example.com/skills/my-skill.zip
+kautilya skill import https://example.com/skills/my-skill.zip
 ```
 
 **From Anthropic Marketplace:**
 ```bash
-agentctl skill import anthropic://pdf-form-filler@1.2.0
+kautilya skill import anthropic://pdf-form-filler@1.2.0
 ```
 
 ## Best Practices

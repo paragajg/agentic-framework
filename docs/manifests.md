@@ -696,13 +696,13 @@ metadata:
 
 ```bash
 # Validate manifest syntax
-agentctl manifest validate workflow.yaml
+kautilya manifest validate workflow.yaml
 
 # Test execution (dry run)
-agentctl manifest test workflow.yaml --dry-run
+kautilya manifest test workflow.yaml --dry-run
 
 # Lint for best practices
-agentctl manifest lint workflow.yaml
+kautilya manifest lint workflow.yaml
 ```
 
 ### Programmatic Validation

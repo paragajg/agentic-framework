@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.live import Live
 
 # Import new animations
-from agentctl.animations import (
+from kautilya.animations import (
     WelcomeScreen,
     ModernSpinner,
     TypingEffect,
@@ -33,7 +33,7 @@ def show_welcome_enhanced():
     """Enhanced welcome screen with animations."""
 
     # Instead of the old panel-based welcome:
-    # console.print(Panel("Welcome to AgentCtl..."))
+    # console.print(Panel("Welcome to Kautilya..."))
 
     # Use animated welcome screen:
     WelcomeScreen.show(
@@ -263,7 +263,7 @@ def cmd_mcp_enable_enhanced(self, tool_id: str) -> None:
     """Enhanced MCP enable with connection animation."""
 
     # 1. Check gateway connection with pulsing indicator
-    from agentctl.animations import PulsingIndicator
+    from kautilya.animations import PulsingIndicator
 
     indicator = PulsingIndicator(
         console,
@@ -282,7 +282,7 @@ def cmd_mcp_enable_enhanced(self, tool_id: str) -> None:
         Celebration.error(
             console,
             "MCP Gateway is not running",
-            details="Start with: agentctl (gateway auto-starts)\nOr manually: cd mcp-gateway && ./start.sh",
+            details="Start with: kautilya (gateway auto-starts)\nOr manually: cd mcp-gateway && ./start.sh",
         )
         return
 
@@ -380,7 +380,7 @@ def cmd_status_enhanced(self) -> None:
     # Show in panel
     panel = Panel(
         table,
-        title="[bold]AgentCtl Status[/bold]",
+        title="[bold]Kautilya Status[/bold]",
         border_style="cyan",
     )
     console.print(panel)
@@ -470,8 +470,8 @@ def integrate_into_interactive_py():
 
     5. Add configuration:
         # In __init__ or config
-        self.enable_animations = os.getenv("AGENTCTL_ANIMATIONS", "true").lower() == "true"
-        self.typing_speed = float(os.getenv("AGENTCTL_TYPING_SPEED", "0.03"))
+        self.enable_animations = os.getenv("KAUTILYA_ANIMATIONS", "true").lower() == "true"
+        self.typing_speed = float(os.getenv("KAUTILYA_TYPING_SPEED", "0.03"))
 
     6. Graceful fallback:
         if self.enable_animations:
@@ -486,4 +486,4 @@ if __name__ == "__main__":
     print("This is a reference implementation.")
     print("See the examples above for integration patterns.")
     print("\nTo test animations, run:")
-    print("  python -m agentctl.animations_demo")
+    print("  python -m kautilya.animations_demo")
