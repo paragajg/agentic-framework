@@ -1796,6 +1796,57 @@ class KautilyaLLMClient:
         # Priority 4: Hardcoded default
         return "gpt-4o-mini"
 
+    def _try_fix_incomplete_json(self, raw_json: str) -> Optional[Dict[str, Any]]:
+        """
+        Attempt to fix incomplete JSON from streaming responses.
+
+        Common issues:
+        - Unterminated strings (missing closing quote)
+        - Missing closing braces/brackets
+        - Truncated content
+
+        Args:
+            raw_json: The incomplete/malformed JSON string
+
+        Returns:
+            Parsed dict if fixable, None otherwise
+        """
+        if not raw_json or raw_json.strip() == "":
+            return {}
+
+        # Try original first
+        try:
+            return json.loads(raw_json)
+        except json.JSONDecodeError:
+            pass
+
+        # Common fixes for streaming issues
+        fixes_to_try = [
+            # Fix: missing closing quote and brace
+            lambda s: s + '"}',
+            # Fix: missing closing brace only
+            lambda s: s + '}',
+            # Fix: missing closing bracket and brace
+            lambda s: s + ']}',
+            # Fix: truncated in middle of value - add quote and braces
+            lambda s: s.rstrip(',') + '"}' if s.rstrip().endswith(',') else None,
+            # Fix: truncated string value
+            lambda s: s + '"' + '}' * (s.count('{') - s.count('}')),
+        ]
+
+        for fix in fixes_to_try:
+            try:
+                fixed = fix(raw_json)
+                if fixed:
+                    result = json.loads(fixed)
+                    # Verify it's a dict (expected format for tool args)
+                    if isinstance(result, dict):
+                        return result
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        return None
+
     def _check_reasoning_model(self) -> bool:
         """Check if current model is a reasoning model (no temperature support)."""
         model_lower = self.model.lower()
@@ -2312,9 +2363,29 @@ Tool execution details are shown separately in the UI - do not narrate them in y
                         yield f"\n\n> Executing: {tool_call['function']['name']}...\n"
 
                         try:
+                            # Parse tool arguments with error handling for streaming issues
+                            raw_args = tool_call["function"]["arguments"] or "{}"
+                            try:
+                                parsed_args = json.loads(raw_args)
+                            except json.JSONDecodeError as json_err:
+                                # Handle incomplete/malformed JSON from streaming
+                                error_msg = str(json_err)
+                                if "Unterminated string" in error_msg or "Expecting" in error_msg:
+                                    # Try to fix common streaming issues
+                                    fixed_args = self._try_fix_incomplete_json(raw_args)
+                                    if fixed_args:
+                                        parsed_args = fixed_args
+                                    else:
+                                        raise ValueError(
+                                            f"Failed to parse tool arguments (streaming issue): {error_msg}. "
+                                            f"This is a transient error - please retry your query."
+                                        )
+                                else:
+                                    raise
+
                             result = tool_executor.execute(
                                 tool_call["function"]["name"],
-                                json.loads(tool_call["function"]["arguments"] or "{}"),
+                                parsed_args,
                             )
 
                             # Ensure result is serializable
@@ -2323,10 +2394,17 @@ Tool execution details are shown separately in the UI - do not narrate them in y
 
                         except Exception as tool_error:
                             # If tool execution fails, still add a response to match the tool_call_id
+                            error_str = str(tool_error)
+                            # Check for streaming-related errors
+                            is_transient = any(x in error_str.lower() for x in [
+                                "unterminated", "streaming", "incomplete", "truncated"
+                            ])
                             result = {
                                 "success": False,
-                                "error": str(tool_error),
-                                "message": f"Tool execution failed: {str(tool_error)}"
+                                "error": error_str,
+                                "message": f"Tool execution failed: {error_str}",
+                                "is_transient": is_transient,
+                                "suggestion": "Please retry your query" if is_transient else None,
                             }
 
                         all_tool_results.append(
@@ -2448,9 +2526,29 @@ Tool execution details are shown separately in the UI - do not narrate them in y
                     # Execute tools
                     for tool_call in valid_tool_calls:
                         try:
+                            # Parse tool arguments with error handling for streaming issues
+                            raw_args = tool_call.function.arguments or "{}"
+                            try:
+                                parsed_args = json.loads(raw_args)
+                            except json.JSONDecodeError as json_err:
+                                # Handle incomplete/malformed JSON from streaming
+                                error_msg = str(json_err)
+                                if "Unterminated string" in error_msg or "Expecting" in error_msg:
+                                    # Try to fix common streaming issues
+                                    fixed_args = self._try_fix_incomplete_json(raw_args)
+                                    if fixed_args:
+                                        parsed_args = fixed_args
+                                    else:
+                                        raise ValueError(
+                                            f"Failed to parse tool arguments (streaming issue): {error_msg}. "
+                                            f"This is a transient error - please retry your query."
+                                        )
+                                else:
+                                    raise
+
                             result = tool_executor.execute(
                                 tool_call.function.name,
-                                json.loads(tool_call.function.arguments),
+                                parsed_args,
                             )
 
                             # Ensure result is serializable
@@ -2459,10 +2557,17 @@ Tool execution details are shown separately in the UI - do not narrate them in y
 
                         except Exception as tool_error:
                             # If tool execution fails, still add a response to match the tool_call_id
+                            error_str = str(tool_error)
+                            # Check for streaming-related errors
+                            is_transient = any(x in error_str.lower() for x in [
+                                "unterminated", "streaming", "incomplete", "truncated"
+                            ])
                             result = {
                                 "success": False,
-                                "error": str(tool_error),
-                                "message": f"Tool execution failed: {str(tool_error)}"
+                                "error": error_str,
+                                "message": f"Tool execution failed: {error_str}",
+                                "is_transient": is_transient,
+                                "suggestion": "Please retry your query" if is_transient else None,
                             }
 
                         all_tool_results.append(
