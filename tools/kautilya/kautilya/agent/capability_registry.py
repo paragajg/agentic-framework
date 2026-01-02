@@ -947,15 +947,22 @@ class CapabilityRegistry:
                 if tag.lower() in query_lower:
                     score += 0.08
 
+            # Track if we had any real matches (not just priority)
+            had_real_match = score > 0
+
             # Apply priority (lower priority number = better)
-            priority_bonus = (10 - cap.priority) * 0.015
-            score += priority_bonus
+            # Only apply priority bonus if there was some match
+            if had_real_match:
+                priority_bonus = (10 - cap.priority) * 0.015
+                score += priority_bonus
 
             # PENALTY: If this is document extraction, penalize file_read
             if is_document_extraction and cap.name in ("file_read", "file-read"):
                 score -= 0.5  # Penalize file_read for document tasks
 
-            if score > 0:
+            # Only include capabilities with real relevance signals
+            # (not just priority bonus for random queries like "hi")
+            if had_real_match and score > 0:
                 scored_caps.append((score, cap.priority, cap))
 
         # Sort by score (desc), then by priority (asc)
