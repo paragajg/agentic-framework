@@ -1120,7 +1120,29 @@ class CapabilityRegistry:
             if phrase in query_lower:
                 return True
 
-        # Check if only stop words
+        # Check for patterns that indicate non-conversational intent
+        import re
+
+        # Math/calculation patterns - NOT conversational
+        if re.search(r'\d+\s*[\+\-\*\/\%\^]\s*\d+', query):
+            return False
+        if any(w in query_lower for w in ['calculate', 'compute', 'sum', 'multiply', 'divide']):
+            return False
+
+        # File patterns - NOT conversational
+        if re.search(r'\.\w{2,4}\b', query):  # File extensions like .py, .yaml
+            return False
+
+        # URL patterns - NOT conversational
+        if 'http' in query_lower or 'www.' in query_lower:
+            return False
+
+        # Question words with specific intents - NOT conversational
+        action_words = ['extract', 'analyze', 'read', 'write', 'search', 'find', 'get', 'show', 'list']
+        if any(w in query_lower for w in action_words):
+            return False
+
+        # Check if only stop words (pure conversational)
         words = query_lower.split()
         meaningful_words = [w for w in words if len(w) >= 4 and w not in Capability.STOP_WORDS]
 
