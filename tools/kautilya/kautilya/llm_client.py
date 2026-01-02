@@ -3,20 +3,47 @@ LLM Client for Kautilya Chat Interface.
 
 Module: kautilya/llm_client.py
 
-Provides OpenAI-backed conversational interface for natural language
-interaction with Kautilya features.
+Provides conversational interface for natural language interaction with Kautilya features.
+
+Configuration:
+- Provider and model detection uses the unified LLM adapter factory
+- Configuration from .env (OPENAI_MODEL, ANTHROPIC_MODEL, etc.) with runtime overrides
+- Currently uses OpenAI SDK for full feature support (streaming, tool calling)
+- Future: Full multi-provider support via adapters
+
+Note: For full provider-agnostic LLM usage in skills, use adapters.llm.create_sync_adapter()
 """
 
 import os
 import json
+import sys
 from typing import Any, Dict, List, Optional, Generator
 from dataclasses import dataclass, field
-from openai import OpenAI
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-# Priority: Find .env by searching up from current file to project root
-from pathlib import Path
+# Add adapters to path for unified configuration
+_repo_root = Path(__file__).resolve().parent.parent.parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
+# Import adapter factory for unified configuration
+try:
+    from adapters.llm.factory import (
+        get_default_provider,
+        get_default_model,
+        get_llm_config,
+        LLMProvider,
+        PROVIDER_ENV_MAP,
+    )
+    _ADAPTERS_AVAILABLE = True
+except ImportError:
+    _ADAPTERS_AVAILABLE = False
+
+# Import OpenAI SDK for actual API calls
+# (Kautilya's architecture requires OpenAI-specific features)
+from openai import OpenAI
 
 
 def _find_project_env() -> Optional[Path]:
@@ -1766,7 +1793,9 @@ class KautilyaLLMClient:
         self, param_model: Optional[str], llm_config: Optional[Dict[str, Any]]
     ) -> str:
         """
-        Resolve model with priority: parameter -> .env -> llm.yaml -> default.
+        Resolve model with priority: parameter -> adapter factory -> .env -> llm.yaml -> default.
+
+        Uses the unified adapter factory for consistent configuration across the framework.
 
         Args:
             param_model: Model passed as constructor parameter
@@ -1779,12 +1808,22 @@ class KautilyaLLMClient:
         if param_model:
             return param_model
 
-        # Priority 2: Environment variable from .env (OPENAI_MODEL)
+        # Priority 2: Use adapter factory (reads from .env with proper parsing)
+        if _ADAPTERS_AVAILABLE:
+            try:
+                adapter_model = get_default_model()
+                if adapter_model:
+                    return adapter_model
+            except Exception:
+                pass  # Fall through to legacy resolution
+
+        # Priority 3: Environment variable from .env (OPENAI_MODEL) - legacy fallback
         env_model = os.getenv("OPENAI_MODEL")
         if env_model:
-            return env_model
+            # Clean up potential whitespace from .env
+            return env_model.strip().replace(" ", "")
 
-        # Priority 3: llm.yaml default_model
+        # Priority 4: llm.yaml default_model
         if llm_config and "providers" in llm_config:
             default_provider = llm_config.get("default_provider", "openai")
             if default_provider in llm_config["providers"]:
@@ -1793,7 +1832,7 @@ class KautilyaLLMClient:
                 if yaml_model:
                     return yaml_model
 
-        # Priority 4: Hardcoded default
+        # Priority 5: Hardcoded default
         return "gpt-4o-mini"
 
     def _try_fix_incomplete_json(self, raw_json: str) -> Optional[Dict[str, Any]]:

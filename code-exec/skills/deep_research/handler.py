@@ -39,6 +39,7 @@ def _get_config() -> Dict[str, int]:
 
 def deep_research(
     query: str,
+    documents: Optional[List[str]] = None,
     min_sources: Optional[int] = None,
     max_sources: Optional[int] = None,
     output_format: str = "markdown",
@@ -50,14 +51,17 @@ def deep_research(
     Conduct comprehensive web research on a topic.
 
     This handler orchestrates the research pipeline:
-    1. Execute web search to find relevant sources
-    2. Rank and filter URLs by relevance
-    3. Fetch full content from top sources via Firecrawl MCP
-    4. Extract and structure key data points
-    5. Prepare context for LLM synthesis
+    1. (Optional) Process local documents with document_qa skill
+    2. Execute web search to find relevant sources
+    3. Rank and filter URLs by relevance
+    4. Fetch full content from top sources via Firecrawl MCP
+    5. Extract and structure key data points
+    6. Merge document and web sources with unified citations
+    7. Prepare context for LLM synthesis
 
     Args:
         query: Research question or topic
+        documents: Optional list of local documents (PDF, DOCX, XLSX, PPTX)
         min_sources: Minimum sources to fetch (default from env: 10)
         max_sources: Maximum sources to fetch (default from env: 15)
         output_format: Output format (markdown, json, summary)
@@ -97,8 +101,38 @@ def deep_research(
             "search_queries_used": [],
             "total_content_tokens": 0,
             "execution_time_seconds": 0,
+            "documents_processed": 0,
         },
     }
+
+    # Process local documents if provided
+    document_context = None
+    document_sources = []
+    if documents:
+        try:
+            from skills.document_qa.handler import document_qa
+
+            logger.info(f"Processing {len(documents)} local documents...")
+            doc_result = document_qa(
+                documents=documents,
+                query=query,
+                include_sources=True,
+                max_context_tokens=4000,  # Reserve space for web sources
+                rerank_top_k=5,
+            )
+
+            if doc_result.get("success"):
+                document_context = doc_result.get("answer", "")
+                document_sources = doc_result.get("sources", [])
+                result["metadata"]["documents_processed"] = len(documents)
+                logger.info(f"Extracted {len(document_sources)} sources from documents")
+            else:
+                logger.warning(f"Document processing failed: {doc_result.get('error')}")
+
+        except ImportError:
+            logger.warning("document_qa skill not available, skipping document processing")
+        except Exception as e:
+            logger.warning(f"Error processing documents: {e}")
 
     try:
         # Step 1: Generate search queries
@@ -174,19 +208,41 @@ def deep_research(
         # Step 5: Extract facts across all sources
         result["extracted_facts"] = _extract_cross_source_facts(fetched_sources, query)
 
-        # Step 6: Prepare synthesis context
+        # Step 6: Add document sources to results if available
+        if document_sources:
+            for doc_src in document_sources:
+                # Convert document sources to web source format for consistency
+                result["sources"].append({
+                    "url": f"local://{doc_src.get('file', 'unknown')}",
+                    "title": doc_src.get("file", "Local Document"),
+                    "domain": "local",
+                    "content_summary": doc_src.get("preview", ""),
+                    "extracted_data": {
+                        "page": doc_src.get("page"),
+                        "section": doc_src.get("section"),
+                        "type": "document",
+                    },
+                    "relevance_score": 0.9,  # High relevance for user-provided docs
+                    "fetch_status": "success",
+                    "source_type": "document",
+                })
+
+        # Step 7: Prepare synthesis context
         result["synthesis_context"] = _prepare_synthesis_context(
             query=query,
             sources=fetched_sources,
             extracted_facts=result["extracted_facts"],
             output_format=output_format,
+            document_context=document_context,
         )
 
         # Calculate token estimate
         total_content = " ".join([s.get("content_summary", "") for s in fetched_sources])
+        if document_context:
+            total_content += " " + document_context
         result["metadata"]["total_content_tokens"] = len(total_content.split()) * 1.3
 
-        result["success"] = len(fetched_sources) >= min_sources
+        result["success"] = len(fetched_sources) >= min_sources or len(document_sources) > 0
 
     except Exception as e:
         logger.error(f"Deep research failed: {e}")
@@ -523,6 +579,7 @@ def _prepare_synthesis_context(
     sources: List[Dict],
     extracted_facts: List[Dict],
     output_format: str,
+    document_context: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Prepare context for LLM synthesis.
@@ -532,6 +589,7 @@ def _prepare_synthesis_context(
         sources: Fetched source data
         extracted_facts: Extracted facts
         output_format: Desired output format
+        document_context: Optional context from local documents
 
     Returns:
         Synthesis context with combined content and instructions
@@ -548,6 +606,12 @@ def _prepare_synthesis_context(
 
     # Combine content from all sources
     combined_parts = []
+
+    # Add document context first if available
+    if document_context:
+        combined_parts.append(f"[Local Documents]\n{document_context}")
+
+    # Add web sources
     for idx, source in enumerate(sources):
         summary = source.get("content_summary", "")
         if summary:

@@ -9,6 +9,13 @@
         "minLength": 5,
         "maxLength": 500
       },
+      "documents": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Optional local documents to include in research (PDF, DOCX, XLSX, PPTX). These are processed alongside web sources."
+      },
       "min_sources": {
         "type": "integer",
         "description": "Minimum number of sources to fetch and analyze",

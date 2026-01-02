@@ -2,14 +2,32 @@
 LLM Provider Configuration Commands.
 
 Module: kautilya/commands/llm.py
+
+Uses LLM adapter factory for provider-agnostic configuration and testing.
 """
 
+import os
+import sys
+from pathlib import Path
 from typing import Optional, Dict, Any
+
 import click
 import questionary
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
+
+# Add adapters to path for unified configuration
+_repo_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
+# Import adapter factory for LLM testing
+try:
+    from adapters.llm import create_sync_adapter, get_llm_config as get_adapter_config
+    _ADAPTERS_AVAILABLE = True
+except ImportError:
+    _ADAPTERS_AVAILABLE = False
 
 from ..config import load_llm_config, save_llm_config
 
@@ -290,6 +308,29 @@ def test_llm_connection(config_dir: str) -> None:
             console.print(f"[green]✓[/green] API Key: ${api_key_env} {'(set)' if api_key else '(not set)'}")
             console.print("\n[dim]Note: Full connection test not yet implemented[/dim]")
             return
+
+    # Try using adapter factory for unified configuration
+    if _ADAPTERS_AVAILABLE:
+        try:
+            adapter_config = get_adapter_config()
+            console.print(f"[green]✓[/green] Config Source: .env (via adapter factory)")
+            console.print(f"[green]✓[/green] Provider: {adapter_config.get('provider', 'unknown')}")
+            console.print(f"[green]✓[/green] Model: {adapter_config.get('model', 'unknown')}")
+            console.print(f"[green]✓[/green] API Key: {'set' if adapter_config.get('api_key_set') else 'not set'}")
+
+            # Try to test the connection using the adapter
+            try:
+                adapter = create_sync_adapter()
+                response = adapter.complete_text("Hi", max_tokens=5)
+                console.print(f"[green]✓[/green] Connection: Successfully connected!")
+                console.print(f"[dim]  Response: {response[:50]}...[/dim]" if len(response) > 50 else f"[dim]  Response: {response}[/dim]")
+            except Exception as e:
+                console.print(f"[yellow]⚠[/yellow] Connection test failed: {e}")
+
+            console.print("\n[dim]Tip: Run '/llm config' to create a config file with more options.[/dim]")
+            return
+        except Exception:
+            pass  # Fall through to legacy OpenAI check
 
     # Fallback: Check .env file for OpenAI configuration
     openai_key = os.getenv("OPENAI_API_KEY")

@@ -1,0 +1,103 @@
+name: document-qa
+version: 1.0.0
+description: Extract content from documents (PDF, Word, Excel, PowerPoint) and answer questions with source citations
+author: Agentic Framework
+
+handler: handler.document_qa
+async: false
+
+safety_flags:
+  - file_system
+  - external_call
+  - network_access
+
+requires_approval: false
+anthropic_compatible: true
+
+tags:
+  - document
+  - qa
+  - extraction
+  - rag
+  - haystack
+  - pdf
+  - word
+  - excel
+  - powerpoint
+
+dependencies:
+  - haystack-ai>=2.0.0
+  - markitdown>=0.1.0
+  - sentence-transformers>=2.2.0
+  - openai>=1.0.0
+  - Pillow>=10.0.0
+
+supported_formats:
+  - .pdf
+  - .docx
+  - .xlsx
+  - .pptx
+  - .html
+  - .htm
+  - .csv
+
+# Environment variable configuration
+config:
+  llm_api_key_env: OPENAI_API_KEY
+  llm_model_env: OPENAI_MODEL
+  max_images_env: DOCUMENT_QA_MAX_IMAGES
+  chunk_size_env: DOCUMENT_QA_CHUNK_SIZE
+  chunk_overlap_env: DOCUMENT_QA_CHUNK_OVERLAP
+  image_min_size_env: DOCUMENT_QA_IMAGE_MIN_SIZE_KB
+
+  defaults:
+    max_images: 10
+    chunk_size: 512
+    chunk_overlap: 50
+    image_min_size_kb: 50
+    max_context_tokens: 6000
+    rerank_top_k: 5
+
+# Pipeline components
+components:
+  - name: markitdown_converter
+    type: custom
+    module: components.markitdown_converter.MarkItDownConverter
+
+  - name: vision_describer
+    type: custom
+    module: components.vision_describer.VisionImageDescriber
+
+  - name: semantic_chunker
+    type: custom
+    module: components.semantic_chunker.SemanticChunker
+
+  - name: llm_reranker
+    type: custom
+    module: components.llm_reranker.LLMReranker
+
+  - name: context_assembler
+    type: custom
+    module: components.context_assembler.ContextAssembler
+
+# Pipelines
+pipelines:
+  extraction:
+    components:
+      - markitdown_converter
+      - vision_describer
+      - semantic_chunker
+
+  indexing:
+    components:
+      - sentence_transformers_embedder
+      - document_writer
+
+  generation:
+    components:
+      - vector_retriever
+      - bm25_retriever
+      - document_joiner
+      - llm_reranker
+      - context_assembler
+      - llm_generator

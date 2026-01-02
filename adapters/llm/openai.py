@@ -16,12 +16,19 @@ class OpenAIAdapter(LLMAdapter):
     """
     Adapter for OpenAI API.
 
-    Supports GPT-4, GPT-3.5, and other OpenAI models.
+    Supports GPT-4, GPT-3.5, GPT-5, o-series, and other OpenAI models.
     """
 
     API_BASE_URL: str = "https://api.openai.com/v1"
     DEFAULT_MODEL: str = "gpt-4o"
     DEFAULT_MAX_TOKENS: int = 4096
+
+    # Models that require max_completion_tokens instead of max_tokens
+    # Includes: o1, o3, gpt-5.x, and future models
+    MODELS_WITH_COMPLETION_TOKENS: tuple = (
+        "o1", "o3", "o4",  # Reasoning models
+        "gpt-5",  # GPT-5 series
+    )
 
     def __init__(
         self,
@@ -58,6 +65,10 @@ class OpenAIAdapter(LLMAdapter):
             headers=headers,
             timeout=kwargs.get("default_timeout", 60.0),
         )
+
+    def _uses_completion_tokens(self) -> bool:
+        """Check if model uses max_completion_tokens instead of max_tokens."""
+        return any(self.model.startswith(prefix) for prefix in self.MODELS_WITH_COMPLETION_TOKENS)
 
     def _convert_messages(self, messages: List[LLMMessage]) -> List[Dict[str, Any]]:
         """
@@ -109,7 +120,11 @@ class OpenAIAdapter(LLMAdapter):
         }
 
         if max_tokens:
-            payload["max_tokens"] = max_tokens
+            # Use max_completion_tokens for newer models (o1, o3, gpt-5.x, etc.)
+            if self._uses_completion_tokens():
+                payload["max_completion_tokens"] = max_tokens
+            else:
+                payload["max_tokens"] = max_tokens
 
         # Add any additional parameters
         payload.update(kwargs)
@@ -185,7 +200,11 @@ class OpenAIAdapter(LLMAdapter):
         }
 
         if max_tokens:
-            payload["max_tokens"] = max_tokens
+            # Use max_completion_tokens for newer models (o1, o3, gpt-5.x, etc.)
+            if self._uses_completion_tokens():
+                payload["max_completion_tokens"] = max_tokens
+            else:
+                payload["max_tokens"] = max_tokens
 
         payload.update(kwargs)
 

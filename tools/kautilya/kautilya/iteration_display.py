@@ -7,11 +7,15 @@ Provides beautiful visual feedback for multi-step agent execution.
 Supports two display modes:
 - minimal: Compact one-liner with key metrics
 - detailed: Rich panel with full progress information
+
+Uses LLM adapters for provider-agnostic dynamic follow-up generation.
 """
 
 import os
 import re
+import sys
 import time
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from enum import Enum
 from datetime import datetime
@@ -21,6 +25,18 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.text import Text
 from rich.live import Live
+
+# Add adapters to path for unified configuration
+_repo_root = Path(__file__).resolve().parent.parent.parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
+# Import adapter factory for LLM calls
+try:
+    from adapters.llm import create_sync_adapter
+    _ADAPTERS_AVAILABLE = True
+except ImportError:
+    _ADAPTERS_AVAILABLE = False
 
 
 class DisplayMode(str, Enum):
@@ -674,20 +690,19 @@ def generate_llm_followups(
         return None
 
     try:
-        from openai import OpenAI
+        # Use adapter factory for provider-agnostic LLM call
+        if _ADAPTERS_AVAILABLE:
+            adapter = create_sync_adapter()
+        else:
+            # Fallback to direct OpenAI if adapters not available
+            from openai import OpenAI
 
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            return None
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                return None
 
-        client = OpenAI(api_key=api_key)
-
-        # Use a fast model for follow-up generation
-        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-
-        # Check if this is a reasoning model (uses max_completion_tokens instead of max_tokens)
-        model_lower = model.lower()
-        is_reasoning_model = any(x in model_lower for x in ["o1", "o3", "gpt-5", "reasoning"])
+            adapter = None
+            client = OpenAI(api_key=api_key)
 
         # Truncate content if too long to keep costs low
         truncated_response = response_content[:2000] if len(response_content) > 2000 else response_content
@@ -706,24 +721,30 @@ Generate 3 follow-up questions that:
 
 Return ONLY the 3 questions, one per line, without numbering or bullets."""
 
-        # Build API parameters based on model type
-        api_params = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-
-        if is_reasoning_model:
-            # Reasoning models need more tokens (reasoning + output)
-            # Use 1000 to ensure enough for both thinking and output
-            api_params["max_completion_tokens"] = 1000
+        # Call LLM via adapter or direct client
+        if _ADAPTERS_AVAILABLE and adapter:
+            questions_text = adapter.complete_text(prompt, temperature=0.7, max_tokens=150)
         else:
-            api_params["max_tokens"] = 150
-            api_params["temperature"] = 0.7
+            # Fallback to direct OpenAI call
+            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+            model_lower = model.lower()
+            is_reasoning_model = any(x in model_lower for x in ["o1", "o3", "gpt-5", "reasoning"])
 
-        response = client.chat.completions.create(**api_params)
+            api_params = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+
+            if is_reasoning_model:
+                api_params["max_completion_tokens"] = 1000
+            else:
+                api_params["max_tokens"] = 150
+                api_params["temperature"] = 0.7
+
+            response = client.chat.completions.create(**api_params)
+            questions_text = response.choices[0].message.content.strip()
 
         # Parse the response
-        questions_text = response.choices[0].message.content.strip()
         questions = []
 
         for line in questions_text.split('\n'):
