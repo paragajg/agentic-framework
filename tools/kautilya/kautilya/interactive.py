@@ -822,7 +822,8 @@ class InteractiveMode:
                         console.print(f"[dim]   Primary: {primary.name} - {when_to_use_short}...[/dim]")
                     console.print()
 
-                    # Restart spinner for execution
+                    # Restart spinner for execution - reset spinner_stopped flag
+                    spinner_stopped = False
                     if animations_enabled:
                         spinner = ModernSpinner(console, f"Executing {primary.name}", "pulse", style="green")
                     else:
@@ -860,14 +861,24 @@ class InteractiveMode:
                 else:
                     console.print(f"[dim]{msg}[/dim]")
 
-            # Get response from result
+            # Get response from result - clean up execution markers
             response_text = result.response or ""
             current_iteration = result.iterations
 
-            # Stop spinner
-            if not spinner_stopped:
+            # Remove execution markers from response (they're displayed separately)
+            import re
+            response_text = re.sub(r'\n*> Executing: [a-z_]+\.\.\.\n*', '\n', response_text)
+            response_text = re.sub(r'\n*\[Iteration \d+/\d+\]\n*', '\n', response_text)
+            response_text = response_text.strip()
+
+            # Always stop the spinner after execution completes
+            try:
                 think_time = spinner.stop()
-                console.print(f"[dim]Processed in {think_time:.1f}s[/dim]\n")
+                if not spinner_stopped:
+                    console.print(f"[dim]Processed in {think_time:.1f}s[/dim]\n")
+                spinner_stopped = True
+            except Exception:
+                pass  # Spinner may already be stopped
 
             # Calculate query statistics
             query_duration = time.time() - query_start_time
@@ -904,6 +915,18 @@ class InteractiveMode:
                 from kautilya.iteration_display import display_sources_summary
 
                 display_sources_summary(console)
+            except Exception:
+                pass
+
+            # Display follow-up questions (contextual based on query and response)
+            try:
+                from kautilya.iteration_display import display_followup_questions
+                display_followup_questions(
+                    console,
+                    original_input,
+                    response_text,
+                    tools_used + (result.skills_used if hasattr(result, 'skills_used') else []),
+                )
             except Exception:
                 pass
 

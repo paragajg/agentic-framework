@@ -479,6 +479,32 @@ class ToolExecutor:
             if not isinstance(result, dict):
                 result = {"success": True, "result": result}
 
+            # Track skill execution as a source
+            try:
+                tracker = get_source_tracker()
+                # Build description from args
+                desc_parts = []
+                if 'query' in args:
+                    desc_parts.append(f"Query: {args['query'][:50]}...")
+                if 'documents' in args:
+                    docs = args['documents']
+                    if isinstance(docs, list):
+                        desc_parts.append(f"Documents: {', '.join(str(d)[:30] for d in docs[:3])}")
+                desc = " | ".join(desc_parts) if desc_parts else f"Skill: {skill_name}"
+
+                # Track sources from skill result if available
+                if result.get('sources'):
+                    for src in result['sources'][:5]:  # Limit to 5 sources
+                        src_file = src.get('file', src.get('document', 'unknown'))
+                        src_page = src.get('page', src.get('chunk_id', ''))
+                        tracker.add_source(
+                            source_type=SourceType.FILE_READ,
+                            location=str(src_file),
+                            description=f"Page {src_page}" if src_page else "Document content",
+                        )
+            except Exception:
+                pass  # Don't fail if source tracking fails
+
             return result
 
         except Exception as e:
