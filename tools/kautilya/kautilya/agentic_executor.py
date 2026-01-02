@@ -80,6 +80,9 @@ class AgenticExecutor:
             skills_dir = self._find_skills_dir()
         self.skills_dir = skills_dir
 
+        # Auto-detect MCP config path
+        self.mcp_config_path = self._find_mcp_config()
+
         # Lazy-loaded components
         self._agent_core = None
         self._llm_client = None
@@ -104,6 +107,24 @@ class AgenticExecutor:
         logger.warning("Could not find skills directory")
         return None
 
+    def _find_mcp_config(self) -> Optional[Path]:
+        """Find the MCP servers configuration file."""
+        # Common locations to search
+        search_paths = [
+            Path.cwd() / ".agentctl" / "external_mcp_servers.yaml",
+            Path.cwd() / ".kautilya" / "mcp_servers.yaml",
+            Path.cwd() / "mcp_servers.yaml",
+            Path(__file__).parent.parent.parent.parent / ".agentctl" / "external_mcp_servers.yaml",
+        ]
+
+        for path in search_paths:
+            if path.exists() and path.is_file():
+                logger.info(f"Found MCP config: {path}")
+                return path
+
+        logger.debug("No MCP config found")
+        return None
+
     def _ensure_initialized(self) -> bool:
         """Ensure all components are initialized."""
         if self._initialized:
@@ -124,11 +145,12 @@ class AgenticExecutor:
             # Initialize tool executor
             self._tool_executor = ToolExecutor(config_dir=self.config_dir)
 
-            # Initialize AgentCore with components
+            # Initialize AgentCore with components (including MCP config for server discovery)
             self._agent_core = AgentCore(
                 llm_client=self._create_llm_adapter(),
                 tool_executor=self._tool_executor,
                 skills_dir=self.skills_dir,
+                mcp_config_path=self.mcp_config_path,
                 max_iterations=self.max_iterations,
                 verbose=self.verbose,
             )

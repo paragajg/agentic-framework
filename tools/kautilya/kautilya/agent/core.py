@@ -78,6 +78,7 @@ class AgentCore:
         llm_client: Any,
         tool_executor: Optional[Any] = None,
         skills_dir: Optional[Path] = None,
+        mcp_config_path: Optional[Path] = None,
         max_iterations: int = 10,
         verbose: bool = False,
     ):
@@ -88,6 +89,7 @@ class AgentCore:
             llm_client: LLM client for reasoning
             tool_executor: Tool executor for running tools
             skills_dir: Directory containing skills
+            mcp_config_path: Path to MCP servers configuration
             max_iterations: Max ReAct iterations
             verbose: Enable verbose logging
         """
@@ -97,7 +99,10 @@ class AgentCore:
 
         # Initialize components
         self.file_resolver = FileResolver()
-        self.capability_registry = CapabilityRegistry(skills_dir)
+        self.capability_registry = CapabilityRegistry(
+            skills_dir=skills_dir,
+            mcp_config_path=mcp_config_path,
+        )
         self.task_planner = TaskPlanner(llm_client, self.capability_registry)
         self.error_recovery = ErrorRecoveryEngine()
         self.session_memory = SessionMemory()
