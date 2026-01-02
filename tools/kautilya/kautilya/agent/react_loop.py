@@ -125,6 +125,29 @@ Available action types:
 - respond: Provide final answer to the user
 - ask_user: Request clarification from the user
 
+## CRITICAL SKILL SELECTION GUIDELINES
+
+When selecting a skill, CAREFULLY read the "WHEN TO USE" and "WHEN NOT TO USE" sections for each skill:
+
+### Document Processing Tasks:
+- For PDF, DOCX, XLSX, PPTX files → Use `document_qa` (has RAG pipeline, semantic search, page citations)
+- For extracting, analyzing, summarizing document content → Use `document_qa`
+- NEVER use `file_read` for documents - it returns raw binary/text without semantic understanding
+
+### Research Tasks:
+- For web research, competitor analysis, market trends → Use `deep_research`
+- For comparing document content with external sources → Use BOTH `document_qa` + `deep_research`
+
+### File Operations:
+- For reading source code, config files (.py, .yaml, .json) → Use `file_read`
+- For saving/exporting results to files → Use `file_write`
+
+### Multi-Step Tasks:
+If the task requires multiple skills (e.g., "extract from PDF, research competitors, save to CSV"):
+1. Execute skills in logical order
+2. Pass outputs between steps
+3. Only use `respond` when ALL steps are complete
+
 When you have enough information to answer, use action_type: "respond" with your final answer.
 
 Always think step by step. If something fails, try an alternative approach."""
@@ -195,8 +218,8 @@ ACTION_INPUT: {{"answer": "your final answer here"}}"""
         steps: List[ThoughtAction] = []
         context = context or {}
 
-        # Build available capabilities description
-        capabilities_desc = await self._get_capabilities_description()
+        # Build available capabilities description (task-aware pre-filtering)
+        capabilities_desc = await self._get_capabilities_description(task=task)
 
         for iteration in range(self.max_iterations):
             logger.info(f"ReAct iteration {iteration + 1}/{self.max_iterations}")
@@ -315,15 +338,45 @@ ACTION_INPUT: {{"answer": "your final answer here"}}"""
             iterations=self.max_iterations,
         )
 
-    async def _get_capabilities_description(self) -> str:
-        """Get description of available capabilities."""
+    async def _get_capabilities_description(self, task: str = "") -> str:
+        """
+        Get description of relevant capabilities for a task.
+
+        Uses two-stage skill selection:
+        1. Stage 1: Fast pre-filter using Tier 1 metadata (intents, file types)
+        2. Stage 2: Format top candidates with full Tier 2 metadata
+
+        Args:
+            task: The user's task description for relevance filtering
+
+        Returns:
+            Formatted capability descriptions for LLM context
+        """
         if not self.capability_registry:
             return "No specific capabilities registered. Use general reasoning."
 
+        # Use two-stage skill selection if task is provided
+        if task:
+            # Stage 1: Pre-filter using lightweight Tier 1 metadata
+            relevant_caps = self.capability_registry.get_relevant_capabilities(
+                query=task,
+                max_results=5,  # Limit to top 5 most relevant
+            )
+
+            if relevant_caps:
+                # Stage 2: Format with full Tier 2 metadata for LLM decision
+                return self.capability_registry.format_selected_capabilities_for_prompt(
+                    capabilities=relevant_caps,
+                    include_when_not_to_use=True,
+                )
+
+        # Fallback: Get all capabilities (limited)
         capabilities = self.capability_registry.get_all()
         lines = []
-        for cap in capabilities[:20]:  # Limit to top 20
+        for cap in capabilities[:10]:  # Limit to top 10
             lines.append(f"- {cap.name}: {cap.description[:100]}")
+            if cap.when_to_use:
+                lines.append(f"  When to use: {cap.when_to_use[:80]}...")
 
         return "\n".join(lines) if lines else "No capabilities available"
 

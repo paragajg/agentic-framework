@@ -32,11 +32,19 @@ class Capability:
     description: str
     parameters: Dict[str, Any] = field(default_factory=dict)  # JSON Schema for inputs
     when_to_use: str = ""  # Semantic description of when to use
+    when_not_to_use: str = ""  # When NOT to use this capability
     handler: Optional[Callable] = None  # Callable handler for skills
     examples: List[str] = field(default_factory=list)
     tags: List[str] = field(default_factory=list)
     requires_approval: bool = False
     safety_flags: List[str] = field(default_factory=list)
+
+    # Tier 1: Lightweight metadata for fast pre-filtering
+    short_description: str = ""  # One-line description for quick display
+    category: str = ""  # Category (document_processing, file_operations, research, etc.)
+    file_types: List[str] = field(default_factory=list)  # Supported file extensions
+    intents: List[str] = field(default_factory=list)  # Matching intents
+    priority: int = 5  # 1=highest, 10=lowest (for sorting within category)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert capability to dictionary."""
@@ -237,16 +245,33 @@ class CapabilityRegistry:
             if handler_path.exists():
                 handler = self._load_handler(handler_path, skill_name)
 
-            # Build when_to_use from description and tags
+            # Get description (may be multiline)
             description = skill_config.get("description", "")
-            tags = skill_config.get("tags", [])
-            when_to_use = self._build_when_to_use(skill_name, description, tags)
+            if isinstance(description, str):
+                description = description.strip()
 
-            # Build examples from SKILL.md if available
-            examples = []
-            skill_md_path = skill_dir / "SKILL.md"
-            if skill_md_path.exists():
-                examples = self._extract_examples_from_skillmd(skill_md_path)
+            tags = skill_config.get("tags", [])
+
+            # Parse Tier 1 metadata (for fast pre-filtering)
+            tier1 = skill_config.get("tier1", {})
+            short_description = tier1.get("short_description", description[:100] if description else "")
+            category = tier1.get("category", "general")
+            file_types = tier1.get("file_types", [])
+            intents = tier1.get("intents", [])
+            priority = tier1.get("priority", 5)
+
+            # Parse Tier 2 metadata (for LLM decision-making)
+            when_to_use = skill_config.get("when_to_use", "")
+            if not when_to_use:
+                when_to_use = self._build_when_to_use(skill_name, description, tags)
+            when_not_to_use = skill_config.get("when_not_to_use", "")
+
+            # Build examples from skill.yaml or SKILL.md
+            examples = skill_config.get("examples", [])
+            if not examples:
+                skill_md_path = skill_dir / "SKILL.md"
+                if skill_md_path.exists():
+                    examples = self._extract_examples_from_skillmd(skill_md_path)
 
             return Capability(
                 name=skill_name,
@@ -254,11 +279,18 @@ class CapabilityRegistry:
                 description=description,
                 parameters=parameters,
                 when_to_use=when_to_use,
+                when_not_to_use=when_not_to_use,
                 handler=handler,
                 examples=examples,
                 tags=tags,
                 requires_approval=skill_config.get("requires_approval", False),
                 safety_flags=skill_config.get("safety_flags", []),
+                # Tier 1 metadata
+                short_description=short_description,
+                category=category,
+                file_types=file_types,
+                intents=intents,
+                priority=priority,
             )
 
         except Exception as e:
@@ -619,5 +651,273 @@ class CapabilityRegistry:
                 if cap.tags:
                     lines.append(f"- Tags: {', '.join(cap.tags)}")
                 lines.append("")
+
+        return "\n".join(lines)
+
+    # ============================================================
+    # TWO-STAGE SKILL SELECTION (Pre-filtering + Rich Context)
+    # ============================================================
+
+    # Intent patterns for pre-filtering
+    INTENT_PATTERNS = {
+        "extract": ["extract", "get", "pull", "identify", "find", "list", "retrieve"],
+        "analyze": ["analyze", "analyse", "evaluate", "assess", "examine", "review"],
+        "summarize": ["summarize", "summarise", "condense", "brief", "overview"],
+        "research": ["research", "investigate", "look up", "find out", "search online"],
+        "compare": ["compare", "contrast", "versus", "vs", "difference", "competitor"],
+        "read": ["read", "show", "display", "view", "cat", "open", "see"],
+        "write": ["write", "save", "create", "export", "output", "generate", "store"],
+        "edit": ["edit", "modify", "change", "update", "fix"],
+        "execute": ["run", "execute", "eval", "compute", "calculate"],
+    }
+
+    # File extension to category mapping
+    FILE_TYPE_CATEGORIES = {
+        "document_processing": [".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".html", ".htm"],
+        "file_operations": [".txt", ".md", ".json", ".yaml", ".yml", ".toml", ".env", ".ini", ".cfg"],
+        "code_execution": [".py", ".js", ".ts", ".java", ".go", ".rs", ".rb", ".sh", ".bash"],
+    }
+
+    def detect_intents(self, query: str) -> List[str]:
+        """
+        Detect user intents from query text.
+
+        Args:
+            query: User's query string
+
+        Returns:
+            List of detected intent types
+        """
+        query_lower = query.lower()
+        detected = []
+
+        for intent, patterns in self.INTENT_PATTERNS.items():
+            for pattern in patterns:
+                if pattern in query_lower:
+                    detected.append(intent)
+                    break  # One match per intent type is enough
+
+        return detected
+
+    # File type keywords that indicate document types (without extension dots)
+    FILE_TYPE_KEYWORDS = {
+        ".pdf": ["pdf", "pdf report", "pdf file", "pdf document"],
+        ".docx": ["word", "word file", "word document", "docx"],
+        ".xlsx": ["excel", "excel file", "spreadsheet", "xlsx"],
+        ".pptx": ["powerpoint", "ppt", "presentation", "pptx"],
+        ".csv": ["csv", "csv file"],
+        ".html": ["html", "webpage", "web page"],
+    }
+
+    def detect_file_extensions(self, query: str) -> List[str]:
+        """
+        Detect file extensions mentioned in query.
+
+        Handles both:
+        1. Explicit extensions: ".pdf", "file.xlsx"
+        2. File type keywords: "pdf report", "excel file", "word document"
+
+        Args:
+            query: User's query string
+
+        Returns:
+            List of detected file extensions (e.g., ['.pdf', '.csv'])
+        """
+        import re
+
+        detected = set()
+        query_lower = query.lower()
+
+        # Pattern 1: Match explicit extensions (e.g., .pdf, file.xlsx)
+        ext_pattern = r'\.(pdf|docx?|xlsx?|pptx?|csv|txt|md|json|yaml|yml|py|js|ts|html?)\b'
+        matches = re.findall(ext_pattern, query_lower)
+        for ext in matches:
+            detected.add(f".{ext}")
+
+        # Pattern 2: Match file type keywords (e.g., "pdf report", "excel file")
+        for extension, keywords in self.FILE_TYPE_KEYWORDS.items():
+            for keyword in keywords:
+                if keyword in query_lower:
+                    detected.add(extension)
+                    break
+
+        return list(detected)
+
+    def get_category_for_file_type(self, file_ext: str) -> Optional[str]:
+        """Get the category for a file extension."""
+        for category, extensions in self.FILE_TYPE_CATEGORIES.items():
+            if file_ext.lower() in extensions:
+                return category
+        return None
+
+    # Intents that indicate document extraction (prefer document_qa over file_read)
+    DOCUMENT_EXTRACTION_INTENTS = {"extract", "analyze", "summarize", "find"}
+
+    def prefilter_capabilities(
+        self,
+        query: str,
+        max_candidates: int = 10,
+    ) -> List[Capability]:
+        """
+        Stage 1: Fast pre-filter capabilities using Tier 1 metadata.
+
+        This uses lightweight metadata (intents, file_types, priority) to quickly
+        narrow down candidates WITHOUT calling the LLM.
+
+        Args:
+            query: User's query string
+            max_candidates: Maximum number of candidates to return
+
+        Returns:
+            List of candidate capabilities sorted by relevance
+        """
+        if not self._capabilities and not self._cleared:
+            self.discover_all()
+
+        # Detect intents and file types from query
+        detected_intents = set(self.detect_intents(query))
+        detected_extensions = self.detect_file_extensions(query)
+
+        # Check if this is a document extraction task
+        has_document_file = any(
+            self.get_category_for_file_type(ext) == "document_processing"
+            for ext in detected_extensions
+        )
+        has_extraction_intent = bool(detected_intents & self.DOCUMENT_EXTRACTION_INTENTS)
+        is_document_extraction = has_document_file and has_extraction_intent
+
+        # Score each capability
+        scored_caps: List[tuple] = []
+
+        for cap in self._capabilities.values():
+            score = 0.0
+
+            # STRONG BOOST: Document extraction tasks should use document_qa
+            if is_document_extraction and cap.category == "document_processing":
+                score += 0.8  # Strong boost for document processing skills
+
+            # Score based on intent matching
+            if cap.intents:
+                intent_matches = len(detected_intents & set(cap.intents))
+                score += intent_matches * 0.25
+
+            # Score based on file type matching
+            if detected_extensions and cap.file_types:
+                for ext in detected_extensions:
+                    if ext in cap.file_types:
+                        score += 0.35  # Strong signal
+                    # Check if skill handles document types
+                    category = self.get_category_for_file_type(ext)
+                    if category and cap.category == category:
+                        score += 0.2
+
+            # Score based on category + detected file types
+            if detected_extensions:
+                for ext in detected_extensions:
+                    category = self.get_category_for_file_type(ext)
+                    if category == "document_processing" and cap.category == "document_processing":
+                        score += 0.25
+                    elif category == cap.category:
+                        score += 0.12
+
+            # Bonus for keyword matches in description/tags
+            query_lower = query.lower()
+            for tag in cap.tags:
+                if tag.lower() in query_lower:
+                    score += 0.08
+
+            # Apply priority (lower priority number = better)
+            priority_bonus = (10 - cap.priority) * 0.015
+            score += priority_bonus
+
+            # PENALTY: If this is document extraction, penalize file_read
+            if is_document_extraction and cap.name in ("file_read", "file-read"):
+                score -= 0.5  # Penalize file_read for document tasks
+
+            if score > 0:
+                scored_caps.append((score, cap.priority, cap))
+
+        # Sort by score (desc), then by priority (asc)
+        scored_caps.sort(key=lambda x: (-x[0], x[1]))
+
+        # Return top candidates
+        return [cap for _, _, cap in scored_caps[:max_candidates]]
+
+    def get_relevant_capabilities(
+        self,
+        query: str,
+        max_results: int = 5,
+    ) -> List[Capability]:
+        """
+        Two-stage skill selection: Pre-filter then rank.
+
+        Stage 1: Fast pre-filter using Tier 1 metadata (no LLM)
+        Stage 2: Return top candidates with full Tier 2 metadata
+
+        Args:
+            query: User's query string
+            max_results: Maximum number of relevant capabilities
+
+        Returns:
+            List of relevant capabilities with full metadata
+        """
+        # Stage 1: Pre-filter using Tier 1 metadata
+        candidates = self.prefilter_capabilities(query, max_candidates=max_results * 2)
+
+        if not candidates:
+            # Fallback to keyword matching if no pre-filter matches
+            return self.match_capabilities(query, max_results=max_results)
+
+        # Return top results (already sorted by relevance)
+        return candidates[:max_results]
+
+    def format_selected_capabilities_for_prompt(
+        self,
+        capabilities: List[Capability],
+        include_when_not_to_use: bool = True,
+    ) -> str:
+        """
+        Format selected capabilities with FULL Tier 2 metadata for LLM.
+
+        Only called for pre-filtered candidates to keep prompt size small.
+
+        Args:
+            capabilities: List of pre-filtered capabilities
+            include_when_not_to_use: Whether to include when_not_to_use guidance
+
+        Returns:
+            Formatted string for inclusion in system prompt
+        """
+        lines = ["# Relevant Skills for This Task\n"]
+        lines.append("The following skills have been pre-selected as relevant. Choose the BEST one.\n")
+
+        for i, cap in enumerate(capabilities, 1):
+            lines.append(f"## {i}. {cap.name} (Priority: {cap.priority})")
+            lines.append(f"**Category:** {cap.category or 'general'}")
+            lines.append(f"**Description:** {cap.description[:200]}...")
+            lines.append("")
+
+            if cap.when_to_use:
+                lines.append("**WHEN TO USE:**")
+                lines.append(cap.when_to_use.strip())
+                lines.append("")
+
+            if include_when_not_to_use and cap.when_not_to_use:
+                lines.append("**WHEN NOT TO USE:**")
+                lines.append(cap.when_not_to_use.strip())
+                lines.append("")
+
+            if cap.examples:
+                lines.append("**Examples:**")
+                for ex in cap.examples[:3]:
+                    lines.append(f"  - {ex}")
+                lines.append("")
+
+            if cap.file_types:
+                lines.append(f"**Supported file types:** {', '.join(cap.file_types)}")
+
+            lines.append("")
+            lines.append("---")
+            lines.append("")
 
         return "\n".join(lines)
