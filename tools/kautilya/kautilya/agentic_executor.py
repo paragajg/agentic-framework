@@ -152,6 +152,7 @@ class AgenticExecutor:
         query: str,
         context: Optional[Dict[str, Any]] = None,
         attached_files: Optional[Dict[str, str]] = None,
+        original_query: Optional[str] = None,
     ) -> Tuple[AgenticResult, List[str]]:
         """
         Execute a query using intelligent skill selection + existing LLM client.
@@ -164,9 +165,10 @@ class AgenticExecutor:
         This avoids nested execution loops by not using AgentCore's ReActLoop.
 
         Args:
-            query: User's query/request
+            query: User's query/request (may include file context prepended)
             context: Additional context
             attached_files: Dict of {path: content} for attached files
+            original_query: The raw user query without context prepended (for skill selection)
 
         Returns:
             Tuple of (AgenticResult, list of progress messages)
@@ -188,8 +190,11 @@ class AgenticExecutor:
             context["attached_files"] = attached_files
 
         # Get relevant skills for this query
+        # IMPORTANT: Use original_query (without context) for skill selection
+        # to avoid always matching document-related skills when files are attached
+        skill_selection_query = original_query if original_query else query
         relevant_caps = self._agent_core.capability_registry.get_relevant_capabilities(
-            query, max_results=5
+            skill_selection_query, max_results=5
         )
 
         if relevant_caps:
@@ -205,7 +210,8 @@ class AgenticExecutor:
                 progress_messages.append(f"> Available: {cap.name}")
 
         # Build skill guidance to inject into the query
-        skill_guidance = self._build_skill_guidance(relevant_caps, query)
+        # Use original query for intent detection in skill guidance
+        skill_guidance = self._build_skill_guidance(relevant_caps, skill_selection_query)
 
         # Convert selected skills to OpenAI tool format
         skill_tools = self._convert_skills_to_tools(relevant_caps)

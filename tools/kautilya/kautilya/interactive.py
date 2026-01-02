@@ -802,9 +802,11 @@ class InteractiveMode:
             result = None
 
             # Show skill selection info
+            # IMPORTANT: Use original_input (not user_input) for skill selection
+            # user_input has file context prepended, which causes document-qa to always be selected
             if self.agentic_executor and self.agentic_executor._agent_core:
                 registry = self.agentic_executor._agent_core.capability_registry
-                relevant_caps = registry.get_relevant_capabilities(user_input, max_results=3)
+                relevant_caps = registry.get_relevant_capabilities(original_input, max_results=3)
 
                 if relevant_caps:
                     skills_info = []
@@ -831,10 +833,12 @@ class InteractiveMode:
                     spinner.start()
 
             # Execute using agentic executor
+            # Pass original_input for skill selection (without file context prepended)
             result, progress_messages = self.agentic_executor.execute(
                 user_input,
                 context={"attached_files": self.attached_context},
                 attached_files=self.attached_context,
+                original_query=original_input,
             )
 
             # Display progress messages
