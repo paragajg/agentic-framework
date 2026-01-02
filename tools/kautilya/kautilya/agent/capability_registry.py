@@ -45,6 +45,7 @@ class Capability:
     file_types: List[str] = field(default_factory=list)  # Supported file extensions
     intents: List[str] = field(default_factory=list)  # Matching intents
     priority: int = 5  # 1=highest, 10=lowest (for sorting within category)
+    schema_path: Optional[str] = None  # Path to schema.json for skill input/output schemas
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert capability to dictionary."""
@@ -304,6 +305,8 @@ class CapabilityRegistry:
                 file_types=file_types,
                 intents=intents,
                 priority=priority,
+                # Schema path for dynamic tool conversion
+                schema_path=str(schema_path) if schema_path.exists() else None,
             )
 
         except Exception as e:

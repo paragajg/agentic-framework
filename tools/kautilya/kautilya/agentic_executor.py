@@ -154,7 +154,14 @@ class AgenticExecutor:
         attached_files: Optional[Dict[str, str]] = None,
     ) -> Tuple[AgenticResult, List[str]]:
         """
-        Execute a query using the agentic framework.
+        Execute a query using intelligent skill selection + existing LLM client.
+
+        This method:
+        1. Uses CapabilityRegistry for intelligent skill selection
+        2. Injects skill guidance into the system prompt
+        3. Delegates execution to KautilyaLLMClient (which handles tool calls)
+
+        This avoids nested execution loops by not using AgentCore's ReActLoop.
 
         Args:
             query: User's query/request
@@ -180,51 +187,59 @@ class AgenticExecutor:
         if attached_files:
             context["attached_files"] = attached_files
 
-        # Show which skills were selected for this query
+        # Get relevant skills for this query
         relevant_caps = self._agent_core.capability_registry.get_relevant_capabilities(
             query, max_results=5
         )
+
         if relevant_caps:
             skills_text = ", ".join(c.name for c in relevant_caps[:3])
             progress_messages.append(f"[Skills selected: {skills_text}]")
 
             # Show primary skill
             primary_skill = relevant_caps[0]
-            progress_messages.append(f"> Executing: {primary_skill.name}")
+            progress_messages.append(f"> Primary: {primary_skill.name}")
 
             # Show queued skills
             for cap in relevant_caps[1:3]:
-                progress_messages.append(f"> Queued: {cap.name}")
+                progress_messages.append(f"> Available: {cap.name}")
 
-        # Run the async process in sync context
+        # Build skill guidance to inject into the query
+        skill_guidance = self._build_skill_guidance(relevant_caps, query)
+
+        # Convert selected skills to OpenAI tool format
+        skill_tools = self._convert_skills_to_tools(relevant_caps)
+        if skill_tools:
+            progress_messages.append(f"[Added {len(skill_tools)} skill tools to LLM]")
+
+        # Execute using the existing LLM client (which has proper tool execution)
         try:
-            # Get or create event loop
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_closed():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+            response_text = ""
+            tools_used = []
 
-            # Run the actual processing
-            result = loop.run_until_complete(
-                self._agent_core.process(query, context)
-            )
+            # Use the LLM client directly with skill guidance prepended
+            enhanced_query = f"{skill_guidance}\n\n[USER REQUEST]\n{query}"
 
-            # Build final response
+            # KautilyaLLMClient.chat() is a generator - pass skill tools
+            for chunk in self._llm_client.chat(
+                enhanced_query,
+                tool_executor=self._tool_executor,
+                additional_tools=skill_tools,
+            ):
+                if isinstance(chunk, str):
+                    response_text += chunk
+
             duration = time.time() - start_time
 
             return AgenticResult(
-                success=result.success,
-                response=result.response,
-                iterations=len(result.react_trace.steps) if result.react_trace else 0,
-                tools_used=result.capabilities_used,
-                skills_used=result.capabilities_used,
-                files_resolved=[str(f.path) for f in result.files_resolved],
+                success=True,
+                response=response_text,
+                iterations=1,
+                tools_used=tools_used,
+                skills_used=[c.name for c in relevant_caps[:3]],
+                files_resolved=[],
                 duration=duration,
-                error=result.error,
+                error=None,
             ), progress_messages
 
         except Exception as e:
@@ -237,6 +252,86 @@ class AgenticExecutor:
                 duration=time.time() - start_time,
                 error=str(e),
             ), progress_messages + [f"[Error] {str(e)}"]
+
+    def _build_skill_guidance(
+        self,
+        relevant_caps: List[Any],
+        query: str,
+    ) -> str:
+        """
+        Build skill guidance to inject into the query.
+
+        This provides the LLM with context about which skills are most
+        appropriate for this task.
+        """
+        if not relevant_caps:
+            return ""
+
+        lines = ["[SKILL GUIDANCE - Use these skills for this task]"]
+
+        for i, cap in enumerate(relevant_caps[:3], 1):
+            lines.append(f"\n{i}. {cap.name}")
+            if cap.description:
+                lines.append(f"   Description: {cap.description[:100]}...")
+            if cap.when_to_use:
+                first_line = cap.when_to_use.split('\n')[0][:80]
+                lines.append(f"   When to use: {first_line}...")
+
+        # Add explicit instruction based on detected task type
+        registry = self._agent_core.capability_registry
+        intents = registry.detect_intents(query)
+        extensions = registry.detect_file_extensions(query)
+
+        if extensions and any(ext in ['.pdf', '.docx', '.xlsx'] for ext in extensions):
+            if any(intent in ['extract', 'analyze', 'summarize'] for intent in intents):
+                lines.append("\n[IMPORTANT] For document extraction, use the document_qa approach with semantic search.")
+
+        if any(intent in ['research', 'search'] for intent in intents):
+            lines.append("\n[IMPORTANT] For web research, use web_search or deep_research to find current information.")
+
+        return "\n".join(lines)
+
+    def _convert_skills_to_tools(
+        self,
+        capabilities: List[Any],
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert capabilities to OpenAI-compatible tool definitions.
+
+        This allows the LLM to call skills like document_qa, deep_research, etc.
+        by using the Capability's built-in to_openai_tool() method.
+
+        Args:
+            capabilities: List of Capability objects
+
+        Returns:
+            List of OpenAI tool definitions
+        """
+        tools = []
+
+        for cap in capabilities:
+            try:
+                # Use the built-in conversion method
+                tool = cap.to_openai_tool()
+
+                # Normalize the function name (replace hyphens with underscores)
+                if "function" in tool:
+                    original_name = tool["function"]["name"]
+                    # Remove skill_ prefix if present and normalize
+                    if original_name.startswith("skill_"):
+                        normalized_name = original_name[6:].replace("-", "_")
+                    else:
+                        normalized_name = original_name.replace("-", "_")
+                    tool["function"]["name"] = normalized_name
+
+                tools.append(tool)
+                logger.debug(f"Converted skill to tool: {cap.name}")
+
+            except Exception as e:
+                logger.warning(f"Failed to convert skill {cap.name} to tool: {e}")
+                continue
+
+        return tools
 
     def get_available_skills(self) -> List[str]:
         """Get list of available skill names."""

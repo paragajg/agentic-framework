@@ -2164,12 +2164,18 @@ Tool execution details are shown separately in the UI - do not narrate them in y
         self,
         include_tools: bool = True,
         stream: bool = True,
+        additional_tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Get chat completion parameters based on model type.
 
         Reasoning models (o1, o3, o4, gpt-5) don't support temperature,
         top_p, presence_penalty, frequency_penalty, etc.
+
+        Args:
+            include_tools: Whether to include tool definitions
+            stream: Whether to stream the response
+            additional_tools: Extra tools to add (e.g., dynamic skill tools)
         """
         params: Dict[str, Any] = {
             "model": self.model,
@@ -2187,7 +2193,10 @@ Tool execution details are shown separately in the UI - do not narrate them in y
             params["stream_options"] = {"include_usage": True}  # Get token usage in streaming mode
 
         if include_tools:
-            params["tools"] = KAUTILYA_TOOLS + CODE_EXECUTION_TOOLS
+            tools = KAUTILYA_TOOLS + CODE_EXECUTION_TOOLS
+            if additional_tools:
+                tools = tools + additional_tools
+            params["tools"] = tools
             params["tool_choice"] = "auto"
 
         # Only add sampling parameters for non-reasoning models
@@ -2215,6 +2224,7 @@ Tool execution details are shown separately in the UI - do not narrate them in y
         tool_executor: Optional[Any] = None,
         stream: bool = True,
         max_tool_iterations: Optional[int] = None,
+        additional_tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Generator[str, None, Optional[Dict[str, Any]]]:
         """
         Send a chat message and get response with agentic loop support.
@@ -2227,6 +2237,7 @@ Tool execution details are shown separately in the UI - do not narrate them in y
             tool_executor: Optional executor for tool calls
             stream: Whether to stream the response
             max_tool_iterations: Maximum tool execution iterations (defaults to config or 5)
+            additional_tools: Extra tools to add dynamically (e.g., skill tools)
 
         Yields:
             Response chunks (if streaming)
@@ -2263,7 +2274,7 @@ Tool execution details are shown separately in the UI - do not narrate them in y
                         )
 
                     # Get response WITH TOOLS ENABLED (critical for agentic loop)
-                    params = self._get_chat_params(include_tools=True, stream=True)
+                    params = self._get_chat_params(include_tools=True, stream=True, additional_tools=additional_tools)
                     response = self.client.chat.completions.create(**params)
 
                     collected_content = ""
@@ -2534,7 +2545,7 @@ Tool execution details are shown separately in the UI - do not narrate them in y
                             "This is a bug - please report with your query."
                         )
 
-                    params = self._get_chat_params(include_tools=True, stream=False)
+                    params = self._get_chat_params(include_tools=True, stream=False, additional_tools=additional_tools)
                     response = self.client.chat.completions.create(**params)
 
                     message = response.choices[0].message

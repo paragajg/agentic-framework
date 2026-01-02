@@ -293,6 +293,11 @@ class ToolExecutor:
         method = getattr(self, f"_exec_{tool_name}", None)
 
         if method is None:
+            # Try to execute as a skill from skills directory
+            skill_result = self._try_execute_skill(tool_name, args)
+            if skill_result is not None:
+                return skill_result
+
             return {
                 "success": False,
                 "error": f"Unknown tool: {tool_name}",
@@ -304,6 +309,175 @@ class ToolExecutor:
             return {
                 "success": False,
                 "error": str(e),
+            }
+
+    def _try_execute_skill(
+        self,
+        skill_name: str,
+        args: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Try to execute a skill from the skills directory.
+
+        Skills are dynamically discovered and executed from code-exec/skills/.
+
+        Args:
+            skill_name: Name of the skill (e.g., "document_qa", "deep_research")
+            args: Skill arguments
+
+        Returns:
+            Execution result or None if skill not found
+        """
+        # Normalize skill name (replace hyphens with underscores)
+        normalized_name = skill_name.replace("-", "_")
+
+        # Find skills directory
+        skills_dir = _project_root / "code-exec" / "skills"
+        if not skills_dir.exists():
+            logger.debug(f"Skills directory not found: {skills_dir}")
+            return None
+
+        # Try to find the skill - check multiple locations
+        skill_path = None
+        possible_paths = [
+            skills_dir / normalized_name,  # e.g., skills/document_qa
+            skills_dir / skill_name,  # e.g., skills/document-qa
+        ]
+
+        # Also search in subdirectories (e.g., skills/file_operations/file_write)
+        for subdir in skills_dir.iterdir():
+            if subdir.is_dir() and not subdir.name.startswith(("_", ".")):
+                possible_paths.append(subdir / normalized_name)
+                possible_paths.append(subdir / skill_name)
+
+        for path in possible_paths:
+            if path.exists() and path.is_dir():
+                skill_path = path
+                break
+
+        if not skill_path:
+            logger.debug(f"Skill not found: {skill_name}")
+            return None
+
+        # Load and execute the handler
+        handler_path = skill_path / "handler.py"
+        if not handler_path.exists():
+            logger.warning(f"Skill handler not found: {handler_path}")
+            return None
+
+        try:
+            import importlib
+
+            # Add skill directory and parent to path for imports
+            skill_parent = skill_path.parent
+            paths_to_add = [str(skill_parent), str(skill_path)]
+            for p in paths_to_add:
+                if p not in sys.path:
+                    sys.path.insert(0, p)
+
+            # For skills with subpackages (like document_qa with components/),
+            # we need to set up proper package structure for relative imports
+            package_name = normalized_name
+
+            # Check if skill has an __init__.py (is a package)
+            init_path = skill_path / "__init__.py"
+            has_init = init_path.exists()
+
+            # Create a proper package module first
+            if has_init or (skill_path / "components").exists() or (skill_path / "pipelines").exists():
+                # This is a package-style skill - import as a package
+
+                # Make sure parent is in path
+                if str(skill_parent) not in sys.path:
+                    sys.path.insert(0, str(skill_parent))
+
+                # Import the package and its handler
+                try:
+                    # Try importing as a package first
+                    pkg = importlib.import_module(package_name)
+                    # Now import the handler from within the package
+                    handler_module = importlib.import_module(f"{package_name}.handler")
+                except ImportError as ie:
+                    # If that fails, create the package structure manually
+                    pkg_spec = importlib.util.spec_from_file_location(
+                        package_name,
+                        init_path if has_init else handler_path,
+                        submodule_search_locations=[str(skill_path)],
+                    )
+                    pkg = importlib.util.module_from_spec(pkg_spec)
+                    pkg.__path__ = [str(skill_path)]
+                    sys.modules[package_name] = pkg
+                    if has_init:
+                        pkg_spec.loader.exec_module(pkg)
+
+                    # Now load the handler
+                    handler_spec = importlib.util.spec_from_file_location(
+                        f"{package_name}.handler",
+                        handler_path,
+                    )
+                    handler_module = importlib.util.module_from_spec(handler_spec)
+                    handler_module.__package__ = package_name
+                    sys.modules[f"{package_name}.handler"] = handler_module
+                    handler_spec.loader.exec_module(handler_module)
+            else:
+                # Simple skill - load directly
+                spec = importlib.util.spec_from_file_location(
+                    f"skill_{normalized_name}_handler",
+                    handler_path
+                )
+                handler_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(handler_module)
+
+            # Find the main function (same name as skill or first callable)
+            import inspect
+
+            handler_func = getattr(handler_module, normalized_name, None)
+            if handler_func is None:
+                # Try common handler function names
+                common_names = [
+                    normalized_name.replace("_", ""),  # file_write -> filewrite
+                    "run", "execute", "main", "handler",
+                    # Also try removing common prefixes/suffixes
+                    normalized_name.split("_")[-1],  # file_write -> write
+                ]
+                for name in common_names:
+                    if hasattr(handler_module, name):
+                        obj = getattr(handler_module, name)
+                        if inspect.isfunction(obj):
+                            handler_func = obj
+                            break
+
+            if handler_func is None:
+                # Find the first actual function (not types or imports)
+                for name in dir(handler_module):
+                    if not name.startswith("_"):
+                        obj = getattr(handler_module, name)
+                        if inspect.isfunction(obj):
+                            handler_func = obj
+                            break
+
+            if handler_func is None:
+                logger.warning(f"No handler function found in {handler_path}")
+                return None
+
+            logger.info(f"Executing skill: {skill_name} with handler: {handler_func.__name__}")
+
+            # Execute the handler
+            result = handler_func(**args)
+
+            # Ensure result is a dict
+            if not isinstance(result, dict):
+                result = {"success": True, "result": result}
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to execute skill {skill_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "success": False,
+                "error": f"Skill execution failed: {str(e)}",
             }
 
     # =========================================================================
