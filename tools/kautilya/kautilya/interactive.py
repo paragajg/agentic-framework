@@ -926,13 +926,13 @@ class InteractiveMode:
                 pass
 
             # Display follow-up questions (contextual based on query and response)
+            # Let the function generate dynamic LLM-based follow-ups instead of passing skills
             try:
                 from kautilya.iteration_display import display_followup_questions
                 display_followup_questions(
                     console,
-                    original_input,
-                    response_text,
-                    tools_used + (result.skills_used if hasattr(result, 'skills_used') else []),
+                    user_query=original_input,
+                    response_content=response_text,
                 )
             except Exception:
                 pass
