@@ -88,37 +88,78 @@ class Capability:
             },
         }
 
+    # Common stop words to ignore in matching (reduces false positives)
+    STOP_WORDS = frozenset([
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "must", "shall", "can", "need", "dare",
+        "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
+        "into", "through", "during", "before", "after", "above", "below",
+        "between", "under", "again", "further", "then", "once", "here",
+        "there", "when", "where", "why", "how", "all", "each", "few", "more",
+        "most", "other", "some", "such", "no", "nor", "not", "only", "own",
+        "same", "so", "than", "too", "very", "just", "also", "now", "hi",
+        "hello", "hey", "thanks", "thank", "please", "yes", "no", "ok", "okay",
+        "and", "but", "if", "or", "because", "until", "while", "this", "that",
+        "these", "those", "what", "which", "who", "whom", "whose", "it", "its",
+        "i", "me", "my", "you", "your", "he", "him", "his", "she", "her",
+        "we", "us", "our", "they", "them", "their",
+    ])
+
     def matches_task(self, task_description: str) -> float:
         """
         Calculate how well this capability matches a task.
+
+        Uses word-based matching with stop word filtering to avoid
+        false positives from common words.
 
         Returns:
             Score from 0.0 to 1.0
         """
         task_lower = task_description.lower()
+        # Filter task words: remove stop words and short words
+        task_words = {
+            w for w in task_lower.split()
+            if len(w) >= 4 and w not in self.STOP_WORDS
+        }
+
+        # If no meaningful words in task, return 0
+        if not task_words:
+            return 0.0
+
         score = 0.0
 
-        # Check tags
+        # Check tags (must be meaningful length and exact word match)
         for tag in self.tags:
-            if tag.lower() in task_lower:
+            tag_lower = tag.lower()
+            if len(tag_lower) >= 4 and tag_lower in task_words:
                 score += 0.2
 
-        # Check description keywords
-        desc_words = set(self.description.lower().split())
-        task_words = set(task_lower.split())
+        # Check description keywords (filter out stop words)
+        desc_words = {
+            w for w in self.description.lower().split()
+            if len(w) >= 4 and w not in self.STOP_WORDS
+        }
         overlap = len(desc_words & task_words)
         if overlap > 0:
             score += min(0.3, overlap * 0.1)
 
-        # Check when_to_use
-        when_words = set(self.when_to_use.lower().split())
+        # Check when_to_use (filter out stop words)
+        when_words = {
+            w for w in self.when_to_use.lower().split()
+            if len(w) >= 4 and w not in self.STOP_WORDS
+        }
         when_overlap = len(when_words & task_words)
         if when_overlap > 0:
             score += min(0.3, when_overlap * 0.1)
 
-        # Check examples
+        # Check examples (use word set matching, not substring)
         for example in self.examples:
-            if any(word in task_lower for word in example.lower().split()):
+            example_words = {
+                w for w in example.lower().split()
+                if len(w) >= 4 and w not in self.STOP_WORDS
+            }
+            if task_words & example_words:
                 score += 0.1
 
         return min(1.0, score)
@@ -942,9 +983,12 @@ class CapabilityRegistry:
                         score += 0.12
 
             # Bonus for keyword matches in description/tags
+            # Only match tags that are meaningful (4+ chars) to avoid false positives
+            # from common words like "the", "is", "there", etc.
             query_lower = query.lower()
             for tag in cap.tags:
-                if tag.lower() in query_lower:
+                tag_lower = tag.lower()
+                if len(tag_lower) >= 4 and tag_lower in query_lower:
                     score += 0.08
 
             # Track if we had any real matches (not just priority)
