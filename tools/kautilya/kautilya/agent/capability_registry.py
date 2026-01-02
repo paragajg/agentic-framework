@@ -1074,21 +1074,34 @@ class CapabilityRegistry:
         self,
         query: str,
         max_results: int = 5,
+        use_llm: bool = True,
     ) -> List[Capability]:
         """
-        Two-stage skill selection: Pre-filter then rank.
+        Intelligent skill selection using LLM with rule-based fallback.
 
-        Stage 1: Fast pre-filter using Tier 1 metadata (no LLM)
-        Stage 2: Return top candidates with full Tier 2 metadata
+        Stage 1: Get all available skills as candidates
+        Stage 2: Use LLM to intelligently select the most appropriate skills
+        Fallback: Use rule-based pre-filter if LLM fails or is disabled
 
         Args:
             query: User's query string
             max_results: Maximum number of relevant capabilities
+            use_llm: Whether to use LLM for intelligent selection (default True)
 
         Returns:
             List of relevant capabilities with full metadata
         """
-        # Stage 1: Pre-filter using Tier 1 metadata
+        # Check for conversational/greeting queries - no skills needed
+        if self._is_conversational_query(query):
+            return []
+
+        # Try LLM-based selection first (more intelligent, context-aware)
+        if use_llm:
+            llm_selected = self._select_skills_with_llm(query, max_results)
+            if llm_selected:
+                return llm_selected
+
+        # Fallback to rule-based pre-filter
         candidates = self.prefilter_capabilities(query, max_candidates=max_results * 2)
 
         if not candidates:
@@ -1097,6 +1110,150 @@ class CapabilityRegistry:
 
         # Return top results (already sorted by relevance)
         return candidates[:max_results]
+
+    def _is_conversational_query(self, query: str) -> bool:
+        """Check if query is purely conversational (greetings, thanks, etc.)."""
+        query_lower = query.lower().strip()
+
+        # Check gratitude phrases
+        for phrase in Capability.GRATITUDE_PHRASES:
+            if phrase in query_lower:
+                return True
+
+        # Check if only stop words
+        words = query_lower.split()
+        meaningful_words = [w for w in words if len(w) >= 4 and w not in Capability.STOP_WORDS]
+
+        return len(meaningful_words) == 0
+
+    def _select_skills_with_llm(
+        self,
+        query: str,
+        max_results: int = 5,
+    ) -> Optional[List[Capability]]:
+        """
+        Use LLM to intelligently select the most appropriate skills.
+
+        This provides more dynamic, context-aware skill selection compared
+        to hardcoded pattern matching.
+
+        Args:
+            query: User's query string
+            max_results: Maximum number of skills to select
+
+        Returns:
+            List of selected capabilities, or None if LLM call fails
+        """
+        # Check if LLM selection is enabled
+        llm_enabled = os.getenv("KAUTILYA_LLM_SKILL_SELECT", "true").lower() == "true"
+        if not llm_enabled:
+            return None
+
+        try:
+            # Get all available skills for LLM to choose from
+            all_caps = self.get_all()
+            if not all_caps:
+                return None
+
+            # Format skills for LLM prompt (brief descriptions)
+            skills_list = []
+            for cap in all_caps:
+                brief_desc = cap.description[:100] if cap.description else "No description"
+                skills_list.append(f"- {cap.name}: {brief_desc}")
+
+            skills_text = "\n".join(skills_list)
+
+            # Create prompt for skill selection
+            prompt = f"""You are a skill router. Given a user query, select the most appropriate skills to use.
+
+Available skills:
+{skills_text}
+
+User query: "{query}"
+
+INSTRUCTIONS:
+1. Analyze the user's intent carefully
+2. Select 1-3 skills that are MOST relevant (fewer is better)
+3. For simple questions/greetings, select NONE
+4. For web searches/current info, prefer: deep_research, web_search
+5. For file operations, prefer: file_read, file_write
+6. For document analysis, prefer: document-qa
+7. For code execution, prefer: python_exec
+
+Return ONLY a JSON array of skill names, like: ["skill1", "skill2"]
+If no skills are needed (greeting/simple chat), return: []
+
+Selected skills:"""
+
+            # Call LLM for selection
+            selected_names = self._call_llm_for_selection(prompt)
+
+            if selected_names is None:
+                return None
+
+            # Map selected names to capabilities
+            selected_caps = []
+            for name in selected_names[:max_results]:
+                cap = self.get(name)
+                if cap:
+                    selected_caps.append(cap)
+
+            return selected_caps if selected_caps else None
+
+        except Exception as e:
+            logger.warning(f"LLM skill selection failed: {e}")
+            return None
+
+    def _call_llm_for_selection(self, prompt: str) -> Optional[List[str]]:
+        """
+        Make LLM call for skill selection.
+
+        Uses a fast, cheap model for quick selection decisions.
+
+        Args:
+            prompt: The skill selection prompt
+
+        Returns:
+            List of selected skill names, or None if call fails
+        """
+        try:
+            # Try using the adapter factory first
+            try:
+                from adapters.factory import create_sync_adapter
+                adapter = create_sync_adapter()
+                response_text = adapter.complete_text(prompt, temperature=0.1, max_tokens=100)
+            except ImportError:
+                # Fallback to direct OpenAI
+                from openai import OpenAI
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    return None
+
+                client = OpenAI(api_key=api_key)
+                model = os.getenv("KAUTILYA_SKILL_SELECT_MODEL", "gpt-4o-mini")
+
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=100,
+                    temperature=0.1,
+                )
+                response_text = response.choices[0].message.content.strip()
+
+            # Parse JSON array from response
+            import re
+            # Extract JSON array from response
+            match = re.search(r'\[.*?\]', response_text, re.DOTALL)
+            if match:
+                selected = json.loads(match.group())
+                if isinstance(selected, list):
+                    return [s for s in selected if isinstance(s, str)]
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"LLM selection call failed: {e}")
+            return None
 
     def format_selected_capabilities_for_prompt(
         self,
