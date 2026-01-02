@@ -7,12 +7,14 @@ Provides both slash command interface and natural language chat
 backed by OpenAI LLM for intelligent interaction.
 """
 
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 import sys
 import os
 import time
 import threading
 import re
+import fnmatch
+from pathlib import Path
 from rich.box import ROUNDED
 from rich.console import Console
 from rich.panel import Panel
@@ -147,6 +149,10 @@ class InteractiveMode:
         # Track query statistics
         self.last_query_stats = None
 
+        # Attached file context storage
+        self.attached_context: Dict[str, str] = {}  # path -> content
+        self.attached_stats: Dict[str, dict] = {}  # path -> {size, lines, type}
+
         # Initialize memory manager
         self.memory_manager = None
         self._init_memory_manager()
@@ -171,6 +177,9 @@ class InteractiveMode:
             "/verbose": self.cmd_toggle_verbose,
             "/display": self.cmd_display,
             "/output": self.cmd_output,
+            "/attach": self.cmd_attach,
+            "/detach": self.cmd_detach,
+            "/context": self.cmd_context,
             "/exit": self.cmd_exit,
             "/quit": self.cmd_exit,
         }
@@ -294,6 +303,18 @@ class InteractiveMode:
     def _handle_chat(self, user_input: str) -> None:
         """Handle natural language chat with LLM."""
         console.print()
+
+        # Process @file mentions in user input (auto-attach referenced files)
+        original_input = user_input
+        user_input, newly_attached = self._resolve_at_mentions(user_input)
+        if newly_attached:
+            console.print(f"[dim]📎 Auto-attached {len(newly_attached)} file(s) from @mentions[/dim]")
+
+        # Build context from attached files
+        context_prompt = self._build_context_prompt()
+        if context_prompt:
+            # Prepend context to user message
+            user_input = f"{context_prompt}\n\n[USER QUERY]\n{user_input}"
 
         # Clear source tracker for new query
         from kautilya.tool_executor import clear_source_tracker
@@ -782,6 +803,11 @@ Type [bold green]/help[/bold green] for commands, or describe your task in natur
             ("/output [mode]", "Set output verbosity", "concise | verbose | toggle"),
             ("/chat", "Toggle LLM chat mode", "on | off"),
             ("/clear", "Clear chat history", ""),
+            # File Attachment
+            ("/attach <path>", "Attach file or folder to context", "--flat (non-recursive)"),
+            ("/detach <name>", "Remove file from context", "--all (remove all)"),
+            ("/context", "Show attached files summary", "clear (remove all)"),
+            # Help & Exit
             ("/help", "Show this help message", ""),
             ("/exit", "Exit interactive mode", "(or /quit)"),
         ]
@@ -799,6 +825,13 @@ Type [bold green]/help[/bold green] for commands, or describe your task in natur
                 '  [cyan]"Help me create a research agent"[/cyan]\n'
                 '  [cyan]"List available LLM providers"[/cyan]\n'
                 '  [cyan]"What can agents do?"[/cyan]\n'
+            )
+            console.print(
+                "[bold green]File Attachment (@syntax)[/bold green]\n"
+                "Reference files directly in queries:\n"
+                '  [cyan]"Review @./src/main.py for security issues"[/cyan]\n'
+                '  [cyan]"Explain @config.yaml configuration"[/cyan]\n'
+                '  [cyan]"@./src analyze this codebase"[/cyan] (folders auto-scanned)\n'
             )
 
     def cmd_toggle_chat(self, args: str = "") -> None:
@@ -1069,6 +1102,403 @@ Type [bold green]/help[/bold green] for commands, or describe your task in natur
             console.print("[dim]  concise - Direct answers only, brief source summary[/dim]")
             console.print("[dim]  verbose - Full source details (default for transparency)[/dim]")
             console.print("[dim]  toggle  - Switch between modes[/dim]")
+
+    # =========================================================================
+    # File Attachment Commands
+    # =========================================================================
+
+    # File extensions to include by default (code and text files)
+    ATTACHABLE_EXTENSIONS = {
+        # Code files
+        ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs", ".rb",
+        ".php", ".c", ".cpp", ".h", ".hpp", ".cs", ".swift", ".kt", ".scala",
+        ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd",
+        # Web files
+        ".html", ".htm", ".css", ".scss", ".sass", ".less", ".vue", ".svelte",
+        # Config files
+        ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env",
+        ".xml", ".properties",
+        # Documentation
+        ".md", ".rst", ".txt", ".adoc",
+        # Data files
+        ".csv", ".sql",
+        # Other
+        ".dockerfile", ".gitignore", ".editorconfig", ".prettierrc",
+    }
+
+    # Files/folders to always skip
+    SKIP_PATTERNS = {
+        "__pycache__", ".git", ".svn", ".hg", "node_modules", ".venv", "venv",
+        ".env", ".DS_Store", "*.pyc", "*.pyo", "*.so", "*.dylib", "*.dll",
+        "*.exe", "*.bin", "*.o", "*.a", "*.class", "*.jar", "*.war",
+        "*.zip", "*.tar", "*.gz", "*.rar", "*.7z",
+        "*.png", "*.jpg", "*.jpeg", "*.gif", "*.ico", "*.svg", "*.webp",
+        "*.mp3", "*.mp4", "*.wav", "*.avi", "*.mov",
+        "*.pdf", "*.doc", "*.docx", "*.xls", "*.xlsx", "*.ppt", "*.pptx",
+        ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build",
+        "*.egg-info", ".tox", ".coverage", "htmlcov",
+    }
+
+    # Maximum limits
+    MAX_FILE_SIZE = 1024 * 1024  # 1MB per file
+    MAX_TOTAL_SIZE = 10 * 1024 * 1024  # 10MB total
+    MAX_FILES = 100  # Maximum number of files
+
+    def _should_skip_path(self, path: Path) -> bool:
+        """Check if a path should be skipped based on patterns."""
+        name = path.name
+        for pattern in self.SKIP_PATTERNS:
+            if fnmatch.fnmatch(name, pattern):
+                return True
+            if fnmatch.fnmatch(name.lower(), pattern.lower()):
+                return True
+        return False
+
+    def _is_attachable_file(self, path: Path) -> bool:
+        """Check if a file can be attached based on extension."""
+        # Allow files without extension if they look like config files
+        if path.suffix == "":
+            config_names = {"Dockerfile", "Makefile", "Procfile", "Gemfile", "Rakefile"}
+            return path.name in config_names
+        return path.suffix.lower() in self.ATTACHABLE_EXTENSIONS
+
+    def _read_file_safe(self, path: Path) -> Tuple[Optional[str], Optional[str]]:
+        """Safely read a file, returning (content, error)."""
+        try:
+            if path.stat().st_size > self.MAX_FILE_SIZE:
+                return None, f"File too large (>{self.MAX_FILE_SIZE // 1024}KB)"
+
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            return content, None
+        except Exception as e:
+            return None, str(e)
+
+    def _get_file_type(self, path: Path) -> str:
+        """Get a human-readable file type."""
+        ext = path.suffix.lower()
+        type_map = {
+            ".py": "Python", ".js": "JavaScript", ".ts": "TypeScript",
+            ".jsx": "React JSX", ".tsx": "React TSX", ".java": "Java",
+            ".go": "Go", ".rs": "Rust", ".rb": "Ruby", ".php": "PHP",
+            ".c": "C", ".cpp": "C++", ".cs": "C#", ".swift": "Swift",
+            ".kt": "Kotlin", ".scala": "Scala", ".sh": "Shell",
+            ".html": "HTML", ".css": "CSS", ".scss": "SCSS",
+            ".json": "JSON", ".yaml": "YAML", ".yml": "YAML",
+            ".toml": "TOML", ".xml": "XML", ".md": "Markdown",
+            ".sql": "SQL", ".csv": "CSV", ".txt": "Text",
+        }
+        return type_map.get(ext, ext.upper()[1:] if ext else "Unknown")
+
+    def _attach_file(self, path: Path) -> Tuple[bool, str]:
+        """Attach a single file to context."""
+        if not path.exists():
+            return False, f"File not found: {path}"
+
+        if not path.is_file():
+            return False, f"Not a file: {path}"
+
+        if self._should_skip_path(path):
+            return False, f"Skipped (excluded pattern): {path.name}"
+
+        if not self._is_attachable_file(path):
+            return False, f"Unsupported file type: {path.suffix or 'no extension'}"
+
+        # Check total size limit
+        current_total = sum(len(c) for c in self.attached_context.values())
+        if current_total >= self.MAX_TOTAL_SIZE:
+            return False, "Total attachment size limit reached (10MB)"
+
+        # Check file count limit
+        if len(self.attached_context) >= self.MAX_FILES:
+            return False, f"Maximum file limit reached ({self.MAX_FILES} files)"
+
+        # Read file
+        content, error = self._read_file_safe(path)
+        if error:
+            return False, error
+
+        # Store with absolute path as key
+        abs_path = str(path.absolute())
+        self.attached_context[abs_path] = content
+        self.attached_stats[abs_path] = {
+            "size": len(content),
+            "lines": content.count("\n") + 1,
+            "type": self._get_file_type(path),
+            "name": path.name,
+        }
+
+        return True, f"Attached: {path.name} ({len(content):,} bytes)"
+
+    def _attach_folder(self, folder: Path, recursive: bool = True) -> List[Tuple[str, bool, str]]:
+        """Attach all eligible files from a folder."""
+        results = []
+
+        if not folder.exists():
+            return [(str(folder), False, "Folder not found")]
+
+        if not folder.is_dir():
+            return [(str(folder), False, "Not a folder")]
+
+        # Collect files
+        if recursive:
+            files = [f for f in folder.rglob("*") if f.is_file()]
+        else:
+            files = [f for f in folder.iterdir() if f.is_file()]
+
+        # Sort by path for consistent ordering
+        files.sort()
+
+        attached_count = 0
+        for file_path in files:
+            # Check if any parent folder should be skipped
+            should_skip = False
+            for parent in file_path.relative_to(folder).parents:
+                if self._should_skip_path(Path(parent.name)):
+                    should_skip = True
+                    break
+
+            if should_skip:
+                continue
+
+            success, message = self._attach_file(file_path)
+            if success:
+                attached_count += 1
+                results.append((str(file_path), True, message))
+
+                # Stop if we hit limits
+                if len(self.attached_context) >= self.MAX_FILES:
+                    results.append(("", False, f"Stopped: max file limit ({self.MAX_FILES})"))
+                    break
+
+                current_total = sum(len(c) for c in self.attached_context.values())
+                if current_total >= self.MAX_TOTAL_SIZE:
+                    results.append(("", False, "Stopped: max size limit (10MB)"))
+                    break
+
+        return results
+
+    def _resolve_at_mentions(self, text: str) -> Tuple[str, List[str]]:
+        """
+        Resolve @file mentions in text.
+
+        Returns:
+            Tuple of (cleaned_text, list_of_attached_file_paths)
+        """
+        # Pattern to match @path (handles spaces with quotes)
+        # Examples: @file.py, @./src/main.py, @"path with spaces/file.py"
+        pattern = r'@"([^"]+)"|@(\S+)'
+
+        attached_paths = []
+        mentions_found = []
+
+        for match in re.finditer(pattern, text):
+            # Get the path (either quoted or unquoted)
+            file_path = match.group(1) or match.group(2)
+            mentions_found.append((match.group(0), file_path))
+
+        # Process each mention
+        for mention, file_path in mentions_found:
+            path = Path(file_path).expanduser()
+
+            # Try to resolve relative to current directory
+            if not path.is_absolute():
+                path = Path.cwd() / path
+
+            if path.exists():
+                if path.is_file():
+                    success, _ = self._attach_file(path)
+                    if success:
+                        attached_paths.append(str(path.absolute()))
+                elif path.is_dir():
+                    results = self._attach_folder(path)
+                    for file_path_str, success, _ in results:
+                        if success:
+                            attached_paths.append(file_path_str)
+
+        # Remove @ mentions from text (they're now in context)
+        cleaned_text = re.sub(pattern, "", text).strip()
+        # Clean up multiple spaces
+        cleaned_text = re.sub(r"\s+", " ", cleaned_text)
+
+        return cleaned_text, attached_paths
+
+    def _build_context_prompt(self) -> str:
+        """Build the context prompt from attached files."""
+        if not self.attached_context:
+            return ""
+
+        lines = ["[ATTACHED FILES CONTEXT]"]
+        lines.append(f"The following {len(self.attached_context)} file(s) have been attached for reference:\n")
+
+        for path, content in self.attached_context.items():
+            stats = self.attached_stats.get(path, {})
+            filename = stats.get("name", Path(path).name)
+            file_type = stats.get("type", "Unknown")
+            line_count = stats.get("lines", 0)
+
+            lines.append(f"--- FILE: {filename} ({file_type}, {line_count} lines) ---")
+            lines.append(f"Path: {path}")
+            lines.append("```")
+            # Truncate very large files in context
+            if len(content) > 50000:
+                lines.append(content[:50000])
+                lines.append(f"\n... [truncated, {len(content) - 50000:,} more bytes] ...")
+            else:
+                lines.append(content)
+            lines.append("```")
+            lines.append("")
+
+        lines.append("[END ATTACHED FILES]\n")
+        return "\n".join(lines)
+
+    def cmd_attach(self, args: str) -> None:
+        """
+        Handle /attach command to attach files or folders to context.
+
+        Usage:
+            /attach <file_path>       - Attach a single file
+            /attach <folder_path>     - Attach all files in folder (recursive)
+            /attach <folder> --flat   - Attach files in folder (non-recursive)
+        """
+        if not args.strip():
+            console.print("[yellow]Usage:[/yellow] /attach <file_or_folder_path>")
+            console.print("[dim]  /attach ./src            - Attach folder recursively[/dim]")
+            console.print("[dim]  /attach ./config.yaml   - Attach single file[/dim]")
+            console.print("[dim]  /attach ./src --flat    - Attach folder non-recursively[/dim]")
+            return
+
+        # Parse arguments
+        parts = args.strip().split()
+        path_str = parts[0]
+        recursive = "--flat" not in args
+
+        path = Path(path_str).expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+
+        if not path.exists():
+            console.print(f"[red]Path not found:[/red] {path_str}")
+            return
+
+        console.print(f"\n[bold cyan]Attaching:[/bold cyan] {path}")
+
+        if path.is_file():
+            success, message = self._attach_file(path)
+            if success:
+                console.print(f"[green]✓[/green] {message}")
+            else:
+                console.print(f"[red]✗[/red] {message}")
+        else:
+            mode = "recursive" if recursive else "flat"
+            console.print(f"[dim]Scanning folder ({mode})...[/dim]")
+
+            results = self._attach_folder(path, recursive=recursive)
+
+            success_count = sum(1 for _, success, _ in results if success)
+            fail_count = len(results) - success_count
+
+            if success_count > 0:
+                console.print(f"\n[green]✓ Attached {success_count} file(s)[/green]")
+
+            if fail_count > 0 and os.getenv("KAUTILYA_VERBOSE_MODE", "false").lower() == "true":
+                console.print(f"[dim]Skipped {fail_count} file(s) (use verbose mode for details)[/dim]")
+
+        # Show summary
+        self._show_context_summary()
+
+    def cmd_detach(self, args: str) -> None:
+        """
+        Handle /detach command to remove files from context.
+
+        Usage:
+            /detach <filename>  - Detach file matching name
+            /detach --all       - Detach all files
+        """
+        if not args.strip():
+            console.print("[yellow]Usage:[/yellow] /detach <filename> or /detach --all")
+            return
+
+        if args.strip() == "--all":
+            count = len(self.attached_context)
+            self.attached_context.clear()
+            self.attached_stats.clear()
+            console.print(f"[green]✓ Detached all {count} file(s)[/green]")
+            return
+
+        # Find and remove matching files
+        search = args.strip().lower()
+        to_remove = []
+
+        for path in self.attached_context.keys():
+            filename = Path(path).name.lower()
+            if search in filename or search in path.lower():
+                to_remove.append(path)
+
+        if not to_remove:
+            console.print(f"[yellow]No attached files matching:[/yellow] {args}")
+            return
+
+        for path in to_remove:
+            del self.attached_context[path]
+            if path in self.attached_stats:
+                del self.attached_stats[path]
+            console.print(f"[green]✓[/green] Detached: {Path(path).name}")
+
+        console.print(f"\n[dim]Remaining: {len(self.attached_context)} file(s)[/dim]")
+
+    def cmd_context(self, args: str) -> None:
+        """
+        Handle /context command to show attached files context.
+
+        Usage:
+            /context         - Show attached files summary
+            /context clear   - Clear all attached files
+        """
+        if args.strip() == "clear":
+            count = len(self.attached_context)
+            self.attached_context.clear()
+            self.attached_stats.clear()
+            console.print(f"[green]✓ Cleared {count} attached file(s)[/green]")
+            return
+
+        if not self.attached_context:
+            console.print("[yellow]No files attached.[/yellow]")
+            console.print("[dim]Use /attach <path> to attach files or folders.[/dim]")
+            console.print("[dim]Or use @filename in your query to auto-attach.[/dim]")
+            return
+
+        self._show_context_summary(detailed=True)
+
+    def _show_context_summary(self, detailed: bool = False) -> None:
+        """Show summary of attached files."""
+        if not self.attached_context:
+            return
+
+        total_size = sum(len(c) for c in self.attached_context.values())
+        total_lines = sum(s.get("lines", 0) for s in self.attached_stats.values())
+
+        console.print(f"\n[bold cyan]📎 Attached Context[/bold cyan]")
+        console.print(f"[dim]Files: {len(self.attached_context)} | "
+                     f"Size: {total_size:,} bytes | "
+                     f"Lines: {total_lines:,}[/dim]")
+
+        if detailed:
+            table = Table(show_header=True, header_style="bold", box=ROUNDED)
+            table.add_column("File", style="cyan")
+            table.add_column("Type", style="dim")
+            table.add_column("Lines", justify="right")
+            table.add_column("Size", justify="right")
+
+            for path, stats in sorted(self.attached_stats.items(), key=lambda x: x[1].get("name", "")):
+                table.add_row(
+                    stats.get("name", Path(path).name),
+                    stats.get("type", "?"),
+                    str(stats.get("lines", 0)),
+                    f"{stats.get('size', 0):,}",
+                )
+
+            console.print(table)
 
     def cmd_init(self, args: str) -> None:
         """Handle /init command."""
