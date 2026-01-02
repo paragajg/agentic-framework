@@ -761,7 +761,11 @@ class CapabilityRegistry:
         "edit": ["edit", "modify", "change", "update", "fix"],
         "execute": ["run", "execute", "eval", "compute", "calculate"],
         "search": ["search", "query", "lookup", "google", "bing", "duckduckgo"],  # Web search
+        "scrape": ["scrape", "crawl", "fetch page", "get page", "extract from url", "extract from website"],
     }
+
+    # Intents that indicate web scraping tasks (prefer MCP firecrawl)
+    SCRAPE_INTENTS = {"scrape"}
 
     # File extension to category mapping
     FILE_TYPE_CATEGORIES = {
@@ -884,11 +888,24 @@ class CapabilityRegistry:
         # Check if this is a research/search task
         is_research_task = bool(detected_intents & self.RESEARCH_INTENTS)
 
+        # Check if this is a web scraping task (prefer MCP firecrawl)
+        is_scrape_task = bool(detected_intents & self.SCRAPE_INTENTS)
+
+        # Check for URL patterns in query (strong signal for scraping)
+        has_url = "http://" in query.lower() or "https://" in query.lower() or "www." in query.lower()
+
         # Score each capability
         scored_caps: List[tuple] = []
 
         for cap in self._capabilities.values():
             score = 0.0
+
+            # STRONG BOOST: Web scraping tasks should use MCP firecrawl
+            if (is_scrape_task or has_url) and cap.type == "mcp":
+                if "firecrawl" in cap.name.lower() or "scrape" in cap.name.lower():
+                    score += 0.9  # Very strong boost for firecrawl on scraping tasks
+            elif is_scrape_task and "scrape" in cap.name.lower():
+                score += 0.7  # Boost any scrape-related tool
 
             # STRONG BOOST: Document extraction tasks should use document_qa
             if is_document_extraction and cap.category == "document_processing":
