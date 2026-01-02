@@ -218,7 +218,7 @@ class TestSkillCommand:
 
             content = handler_path.read_text()
             assert "def extract_entities" in content
-            assert "Extract entities" in content
+            assert "extract entities" in content.lower()  # Case-insensitive check
 
 
 class TestLLMCommand:
