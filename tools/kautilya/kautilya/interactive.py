@@ -871,8 +871,11 @@ class InteractiveMode:
 
             # Remove execution markers from response (they're displayed separately)
             import re
-            response_text = re.sub(r'\n*> Executing: [a-z_]+\.\.\.\n*', '\n', response_text)
-            response_text = re.sub(r'\n*\[Iteration \d+/\d+\]\n*', '\n', response_text)
+            # Match various execution marker formats (with/without newlines, different skill name formats)
+            response_text = re.sub(r'\n*>\s*Executing:?\s*[a-zA-Z_-]+\.{0,3}\s*\n*', '\n', response_text)
+            response_text = re.sub(r'\n*\[Iteration\s+\d+/\d+\]\s*\n*', '\n', response_text)
+            # Clean up multiple consecutive newlines
+            response_text = re.sub(r'\n{3,}', '\n\n', response_text)
             response_text = response_text.strip()
 
             # Always stop the spinner after execution completes
