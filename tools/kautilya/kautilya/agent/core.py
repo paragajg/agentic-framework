@@ -118,7 +118,7 @@ class AgentCore:
         """Discover all available capabilities."""
         try:
             self.capability_registry.discover_all()
-            count = len(self.capability_registry.capabilities)
+            count = len(self.capability_registry.get_all())
             logger.info(f"Discovered {count} capabilities")
         except Exception as e:
             logger.warning(f"Capability discovery failed: {e}")

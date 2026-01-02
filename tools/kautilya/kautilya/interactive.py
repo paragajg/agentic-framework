@@ -146,6 +146,10 @@ class InteractiveMode:
         self.tool_executor = None
         self.llm_enabled = False
 
+        # Agentic executor for intelligent skill-based execution
+        self.agentic_executor = None
+        self.agentic_enabled = False
+
         # Track query statistics
         self.last_query_stats = None
 
@@ -193,7 +197,7 @@ class InteractiveMode:
         self._init_llm_client()
 
     def _init_llm_client(self) -> None:
-        """Initialize LLM client if API key is available."""
+        """Initialize LLM client and agentic executor."""
         try:
             # Import triggers .env loading in llm_client module
             from .llm_client import KautilyaLLMClient
@@ -205,15 +209,20 @@ class InteractiveMode:
             self.tool_executor = ToolExecutor(config_dir=self.config_dir)
             self.llm_enabled = True
 
+            # Initialize agentic executor for intelligent skill-based execution
+            self._init_agentic_executor()
+
             # Check web search availability
             try:
                 from ddgs import DDGS
+                mode_str = "Agentic mode" if self.agentic_enabled else "LLM chat"
                 console.print(
-                    "[dim]LLM chat enabled with web search. Type naturally or use /commands.[/dim]"
+                    f"[dim]{mode_str} enabled with web search. Type naturally or use /commands.[/dim]"
                 )
             except ImportError:
+                mode_str = "Agentic mode" if self.agentic_enabled else "LLM chat"
                 console.print(
-                    "[dim]LLM chat enabled. Type naturally or use /commands.[/dim]"
+                    f"[dim]{mode_str} enabled. Type naturally or use /commands.[/dim]"
                 )
                 console.print(
                     "[yellow]⚠ Web search unavailable. Install with: uv pip install ddgs[/yellow]"
@@ -231,6 +240,37 @@ class InteractiveMode:
             console.print(
                 f"[dim yellow]LLM init error: {e}. Using commands only.[/dim yellow]"
             )
+
+    def _init_agentic_executor(self) -> None:
+        """Initialize the agentic executor for intelligent skill-based execution."""
+        # Check if agentic mode is enabled (default: True)
+        agentic_mode = os.getenv("KAUTILYA_AGENTIC_MODE", "true").lower()
+        if agentic_mode == "false" or agentic_mode == "0":
+            console.print("[dim]Agentic mode disabled. Using legacy LLM client.[/dim]")
+            return
+
+        try:
+            from .agentic_executor import AgenticExecutor
+
+            verbose = os.getenv("KAUTILYA_VERBOSE_MODE", "false").lower() == "true"
+            self.agentic_executor = AgenticExecutor(
+                config_dir=self.config_dir,
+                verbose=verbose,
+            )
+            self.agentic_enabled = True
+
+            # Show discovered skills count
+            skills = self.agentic_executor.get_available_skills()
+            if skills:
+                console.print(
+                    f"[dim]Agentic mode: {len(skills)} skills available "
+                    f"(document_qa, deep_research, file_ops, etc.)[/dim]"
+                )
+        except Exception as e:
+            console.print(
+                f"[dim yellow]Agentic executor init failed: {e}. Using legacy mode.[/dim yellow]"
+            )
+            self.agentic_enabled = False
 
     def _init_memory_manager(self) -> None:
         """Initialize memory manager for persistent context."""
@@ -285,8 +325,10 @@ class InteractiveMode:
                             f"Type [bold]/help[/bold] for available commands."
                         )
                 else:
-                    # Natural language - use LLM if enabled
-                    if self.llm_enabled and self.llm_client:
+                    # Natural language - use agentic executor or LLM
+                    if self.agentic_enabled and self.agentic_executor:
+                        self._handle_chat_agentic(user_input)
+                    elif self.llm_enabled and self.llm_client:
                         self._handle_chat(user_input)
                     else:
                         console.print(
@@ -709,6 +751,189 @@ class InteractiveMode:
                 )
             else:
                 console.print(f"[red]Chat error:[/red] {str(e)}")
+
+    def _handle_chat_agentic(self, user_input: str) -> None:
+        """
+        Handle natural language chat using the AgentCore-based agentic executor.
+
+        This method uses intelligent skill selection to choose the best skill
+        for each task (e.g., document_qa for PDF extraction, deep_research for
+        web research).
+        """
+        console.print()
+
+        # Process @file mentions in user input (auto-attach referenced files)
+        original_input = user_input
+        user_input, newly_attached = self._resolve_at_mentions(user_input)
+        if newly_attached:
+            console.print(f"[dim]📎 Auto-attached {len(newly_attached)} file(s) from @mentions[/dim]")
+
+        # Build context from attached files
+        context_prompt = self._build_context_prompt()
+        if context_prompt:
+            # Prepend context to user message
+            user_input = f"{context_prompt}\n\n[USER QUERY]\n{user_input}"
+
+        # Check if animations are enabled
+        animations_enabled = os.getenv("KAUTILYA_ANIMATIONS", "true").lower() == "true"
+        max_iterations = int(os.getenv("KAUTILYA_MAX_ITERATIONS", "5"))
+
+        # Start thinking animation
+        if animations_enabled:
+            spinner = ModernSpinner(console, "Analyzing with skills", "pulse", style="cyan")
+        else:
+            spinner = ThinkingSpinner(console, style="cyan")
+
+        spinner.start()
+        spinner_stopped = False
+
+        # Track statistics
+        import time
+        query_start_time = time.time()
+        tools_used = []
+        current_iteration = 0
+
+        try:
+            # Clear source tracker for new query
+            from kautilya.tool_executor import clear_source_tracker
+            clear_source_tracker()
+
+            response_text = ""
+            result = None
+
+            # Show skill selection info
+            if self.agentic_executor and self.agentic_executor._agent_core:
+                registry = self.agentic_executor._agent_core.capability_registry
+                relevant_caps = registry.get_relevant_capabilities(user_input, max_results=3)
+
+                if relevant_caps:
+                    skills_info = []
+                    for cap in relevant_caps[:3]:
+                        skills_info.append(f"{cap.name}")
+
+                    spinner.stop()
+                    spinner_stopped = True
+                    console.print(f"[dim]🎯 Skills selected: {', '.join(skills_info)}[/dim]")
+
+                    # Show primary skill details
+                    primary = relevant_caps[0]
+                    if primary.when_to_use:
+                        when_to_use_short = primary.when_to_use.split('\n')[0][:80]
+                        console.print(f"[dim]   Primary: {primary.name} - {when_to_use_short}...[/dim]")
+                    console.print()
+
+                    # Restart spinner for execution
+                    if animations_enabled:
+                        spinner = ModernSpinner(console, f"Executing {primary.name}", "pulse", style="green")
+                    else:
+                        spinner = ThinkingSpinner(console, style="green")
+                    spinner.start()
+
+            # Execute using agentic executor
+            result, progress_messages = self.agentic_executor.execute(
+                user_input,
+                context={"attached_files": self.attached_context},
+                attached_files=self.attached_context,
+            )
+
+            # Display progress messages
+            for msg in progress_messages:
+                if msg.startswith("[Skills selected"):
+                    if not spinner_stopped:
+                        spinner.stop()
+                        spinner_stopped = True
+                    console.print(f"[dim]🎯 {msg}[/dim]")
+                elif msg.startswith("> Executing:"):
+                    if not spinner_stopped:
+                        spinner.stop()
+                        spinner_stopped = True
+                    skill_name = msg.replace("> Executing:", "").strip()
+                    tools_used.append(skill_name)
+                    console.print(f"[cyan]⚡ Executing: {skill_name}[/cyan]")
+                elif msg.startswith("> Queued:"):
+                    console.print(f"[dim]{msg}[/dim]")
+                elif msg.startswith("[Error]"):
+                    if not spinner_stopped:
+                        spinner.stop()
+                        spinner_stopped = True
+                    console.print(f"[red]{msg}[/red]")
+                else:
+                    console.print(f"[dim]{msg}[/dim]")
+
+            # Get response from result
+            response_text = result.response or ""
+            current_iteration = result.iterations
+
+            # Stop spinner
+            if not spinner_stopped:
+                think_time = spinner.stop()
+                console.print(f"[dim]Processed in {think_time:.1f}s[/dim]\n")
+
+            # Calculate query statistics
+            query_duration = time.time() - query_start_time
+
+            self.last_query_stats = {
+                "iterations": current_iteration or 1,
+                "max_iterations": max_iterations,
+                "tools_used": tools_used,
+                "total_tools": len(tools_used),
+                "duration": query_duration,
+                "response_length": len(response_text),
+                "usage": None,  # Token usage not available from AgentCore
+            }
+
+            # Display final response
+            if response_text.strip():
+                from rich.markdown import Markdown
+                console.print(Markdown(response_text))
+                console.print()
+            else:
+                console.print("[dim]Task completed with no text output.[/dim]")
+                console.print()
+
+            # Show sources if available
+            try:
+                from kautilya.tool_executor import get_source_tracker
+                from kautilya.iteration_display import display_sources_summary
+
+                display_sources_summary(console)
+            except Exception:
+                pass
+
+            # Remember interaction in memory
+            if self.memory_manager and response_text.strip():
+                try:
+                    self.memory_manager.remember(
+                        user_query=original_input,
+                        agent_response=response_text,
+                        tools_used=tools_used,
+                        sources=[],
+                        iterations=current_iteration or 1,
+                        input_tokens=0,
+                        output_tokens=0,
+                    )
+                except Exception:
+                    pass
+
+            # Show query statistics
+            self._show_query_stats()
+
+        except Exception as e:
+            if not spinner_stopped:
+                spinner.stop()
+
+            if animations_enabled:
+                Celebration.error(
+                    console,
+                    f"Agentic execution error: {str(e)}",
+                    details="An error occurred while processing with agentic skills."
+                )
+            else:
+                console.print(f"[red]Agentic error:[/red] {str(e)}")
+
+            # Fallback to legacy LLM client
+            console.print("[dim]Falling back to legacy LLM mode...[/dim]")
+            self._handle_chat(user_input)
 
     def show_welcome(self) -> None:
         """Show welcome message with beautiful animations."""

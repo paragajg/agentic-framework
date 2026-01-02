@@ -75,7 +75,22 @@ class SafePackageManager:
 
         # Common tools
         "pillow", "opencv-python", "xlrd", "openpyxl",
-        "python-pptx", "python-docx",
+        "python-pptx", "python-docx", "docx",  # docx is alias for python-docx
+
+        # Document processing
+        "markitdown", "pypdf", "pypdf2", "pdfplumber", "pymupdf", "fitz",
+        "mammoth", "docx2txt", "pptx",
+
+        # AI/LLM
+        "openai", "anthropic", "tiktoken", "sentence-transformers",
+        "transformers", "tokenizers", "langchain", "llama-index",
+
+        # Search & RAG
+        "faiss-cpu", "chromadb", "qdrant-client", "pinecone-client",
+        "haystack-ai", "rank-bm25",
+
+        # Web scraping
+        "ddgs", "duckduckgo-search", "selenium", "playwright",
     }
 
     # Blocked packages (security risks)

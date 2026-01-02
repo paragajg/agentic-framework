@@ -176,25 +176,38 @@ class CapabilityRegistry:
         """
         Discover all capabilities from all sources.
 
+        Priority: Skills > Tools > MCP (skills with rich metadata take precedence)
+
         Returns:
             List of all discovered capabilities
         """
         self._capabilities.clear()
 
-        # Discover skills
+        # Track skill names to avoid overwriting with tools
+        skill_names = set()
+
+        # Discover skills FIRST (they have rich tier1/tier2 metadata)
         skill_caps = self._discover_skills()
         for cap in skill_caps:
-            self._capabilities[f"skill_{cap.name}"] = cap
+            # Use the skill name directly (not prefixed)
+            self._capabilities[cap.name] = cap
+            skill_names.add(cap.name)
 
-        # Discover tools
+        # Discover tools (only add if not already covered by a skill)
         tool_caps = self._discover_tools()
         for cap in tool_caps:
-            self._capabilities[cap.name] = cap
+            if cap.name not in skill_names:
+                self._capabilities[cap.name] = cap
+            else:
+                # Tool has same name as skill - skip (skill has richer metadata)
+                logger.debug(f"Skipping tool '{cap.name}' - skill with same name exists")
 
         # Discover MCP servers
         mcp_caps = self._discover_mcp_servers()
         for cap in mcp_caps:
-            self._capabilities[f"mcp_{cap.name}"] = cap
+            mcp_key = f"mcp_{cap.name}"
+            if mcp_key not in self._capabilities:
+                self._capabilities[mcp_key] = cap
 
         logger.info(
             f"Discovered {len(self._capabilities)} capabilities: "
@@ -663,12 +676,13 @@ class CapabilityRegistry:
         "extract": ["extract", "get", "pull", "identify", "find", "list", "retrieve"],
         "analyze": ["analyze", "analyse", "evaluate", "assess", "examine", "review"],
         "summarize": ["summarize", "summarise", "condense", "brief", "overview"],
-        "research": ["research", "investigate", "look up", "find out", "search online"],
+        "research": ["research", "investigate", "look up", "find out", "search online", "search for", "search the", "web search", "look for", "find information"],
         "compare": ["compare", "contrast", "versus", "vs", "difference", "competitor"],
         "read": ["read", "show", "display", "view", "cat", "open", "see"],
         "write": ["write", "save", "create", "export", "output", "generate", "store"],
         "edit": ["edit", "modify", "change", "update", "fix"],
         "execute": ["run", "execute", "eval", "compute", "calculate"],
+        "search": ["search", "query", "lookup", "google", "bing", "duckduckgo"],  # Web search
     }
 
     # File extension to category mapping
@@ -753,6 +767,9 @@ class CapabilityRegistry:
     # Intents that indicate document extraction (prefer document_qa over file_read)
     DOCUMENT_EXTRACTION_INTENTS = {"extract", "analyze", "summarize", "find"}
 
+    # Intents that indicate web research (prefer deep_research)
+    RESEARCH_INTENTS = {"research", "search", "compare"}
+
     def prefilter_capabilities(
         self,
         query: str,
@@ -786,6 +803,9 @@ class CapabilityRegistry:
         has_extraction_intent = bool(detected_intents & self.DOCUMENT_EXTRACTION_INTENTS)
         is_document_extraction = has_document_file and has_extraction_intent
 
+        # Check if this is a research/search task
+        is_research_task = bool(detected_intents & self.RESEARCH_INTENTS)
+
         # Score each capability
         scored_caps: List[tuple] = []
 
@@ -795,6 +815,12 @@ class CapabilityRegistry:
             # STRONG BOOST: Document extraction tasks should use document_qa
             if is_document_extraction and cap.category == "document_processing":
                 score += 0.8  # Strong boost for document processing skills
+
+            # STRONG BOOST: Research/search tasks should use deep_research
+            if is_research_task and cap.category == "research":
+                score += 0.8  # Strong boost for research skills
+            elif is_research_task and cap.name in ("deep_research", "web_search"):
+                score += 0.7  # Also boost web_search for search tasks
 
             # Score based on intent matching
             if cap.intents:
