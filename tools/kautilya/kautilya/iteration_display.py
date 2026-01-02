@@ -10,6 +10,7 @@ Supports two display modes:
 """
 
 import os
+import re
 import time
 from typing import Optional, List, Dict, Any
 from enum import Enum
@@ -646,6 +647,112 @@ def inject_inline_citations(response_text: str, sources: List[Any]) -> str:
     return '\n'.join(result_lines)
 
 
+def generate_llm_followups(
+    user_query: str,
+    response_content: str,
+) -> Optional[List[str]]:
+    """
+    Generate dynamic follow-up questions using an LLM call.
+
+    Makes a lightweight LLM call to generate truly contextual and engaging
+    follow-up questions based on the actual conversation content.
+
+    Args:
+        user_query: The original user query
+        response_content: The generated response content
+
+    Returns:
+        List of 3 contextual follow-up questions, or None if LLM call fails
+    """
+    # Check if dynamic follow-ups are enabled
+    dynamic_enabled = os.getenv("KAUTILYA_DYNAMIC_FOLLOWUPS", "true").lower() == "true"
+    if not dynamic_enabled:
+        return None
+
+    # Don't make LLM call for very short responses
+    if len(response_content) < 100:
+        return None
+
+    try:
+        from openai import OpenAI
+
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            return None
+
+        client = OpenAI(api_key=api_key)
+
+        # Use a fast model for follow-up generation
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+        # Check if this is a reasoning model (uses max_completion_tokens instead of max_tokens)
+        model_lower = model.lower()
+        is_reasoning_model = any(x in model_lower for x in ["o1", "o3", "gpt-5", "reasoning"])
+
+        # Truncate content if too long to keep costs low
+        truncated_response = response_content[:2000] if len(response_content) > 2000 else response_content
+
+        prompt = f"""Based on this conversation, generate exactly 3 engaging follow-up questions that would help the user get more value. Questions should be specific to the content discussed, not generic.
+
+User asked: {user_query}
+
+Response summary: {truncated_response[:1000]}
+
+Generate 3 follow-up questions that:
+1. Are specific to the topic discussed
+2. Would lead to deeper insights or actionable next steps
+3. Are concise (under 15 words each)
+4. Are phrased naturally as questions
+
+Return ONLY the 3 questions, one per line, without numbering or bullets."""
+
+        # Build API parameters based on model type
+        api_params = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+
+        if is_reasoning_model:
+            # Reasoning models need more tokens (reasoning + output)
+            # Use 1000 to ensure enough for both thinking and output
+            api_params["max_completion_tokens"] = 1000
+        else:
+            api_params["max_tokens"] = 150
+            api_params["temperature"] = 0.7
+
+        response = client.chat.completions.create(**api_params)
+
+        # Parse the response
+        questions_text = response.choices[0].message.content.strip()
+        questions = []
+
+        for line in questions_text.split('\n'):
+            line = line.strip()
+            if not line or len(line) < 10:
+                continue
+
+            # Remove common prefixes (numbering, bullets)
+            line = re.sub(r'^[\d]+[\.\)\-]\s*', '', line)  # Remove "1." "1)" "1-"
+            line = re.sub(r'^[\-\*\•]\s*', '', line)  # Remove bullets
+            line = line.strip()
+
+            if len(line) < 10:
+                continue
+
+            # Ensure it ends with a question mark (add if missing)
+            if not line.endswith('?'):
+                line = line.rstrip('.') + '?'
+
+            questions.append(line)
+
+        # Return up to 3 questions
+        return questions[:3] if questions else None
+
+    except Exception as e:
+        # Silently fall back to rule-based if LLM fails
+        return None
+
+
 def generate_contextual_followups(
     user_query: str,
     response_content: str,
@@ -653,7 +760,8 @@ def generate_contextual_followups(
     """
     Generate contextual follow-up questions based on user query and response.
 
-    Analyzes the content to suggest natural, helpful follow-up questions.
+    First attempts to use LLM for dynamic generation, then falls back to
+    rule-based generation if LLM is unavailable or fails.
 
     Args:
         user_query: The original user query
@@ -662,6 +770,10 @@ def generate_contextual_followups(
     Returns:
         List of contextual follow-up questions
     """
+    # Try LLM-based generation first
+    llm_questions = generate_llm_followups(user_query, response_content)
+    if llm_questions and len(llm_questions) >= 2:
+        return llm_questions
     questions = []
     query_lower = user_query.lower()
     response_lower = response_content.lower()
