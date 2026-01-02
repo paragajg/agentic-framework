@@ -89,6 +89,7 @@ class Capability:
         }
 
     # Common stop words to ignore in matching (reduces false positives)
+    # Includes greetings, gratitude phrases, and common English stop words
     STOP_WORDS = frozenset([
         "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
         "have", "has", "had", "do", "does", "did", "will", "would", "could",
@@ -98,12 +99,30 @@ class Capability:
         "between", "under", "again", "further", "then", "once", "here",
         "there", "when", "where", "why", "how", "all", "each", "few", "more",
         "most", "other", "some", "such", "no", "nor", "not", "only", "own",
-        "same", "so", "than", "too", "very", "just", "also", "now", "hi",
-        "hello", "hey", "thanks", "thank", "please", "yes", "no", "ok", "okay",
+        "same", "so", "than", "too", "very", "just", "also", "now",
+        # Greetings and conversational
+        "hi", "hello", "hey", "greetings", "morning", "afternoon", "evening",
+        "goodbye", "bye", "later", "soon", "night",
+        # Gratitude and politeness (context: "thanks for your help" is NOT a help request)
+        "thanks", "thank", "please", "sorry", "excuse", "pardon",
+        "appreciate", "grateful", "welcome", "sure", "certainly",
+        # Common responses
+        "yes", "no", "ok", "okay", "yeah", "yep", "nope", "right", "wrong",
+        "true", "false", "good", "bad", "great", "nice", "cool", "fine",
+        # Conjunctions and connectors
         "and", "but", "if", "or", "because", "until", "while", "this", "that",
         "these", "those", "what", "which", "who", "whom", "whose", "it", "its",
+        # Pronouns
         "i", "me", "my", "you", "your", "he", "him", "his", "she", "her",
         "we", "us", "our", "they", "them", "their",
+        # Common nouns in conversational context
+        "time", "work", "much", "lot", "way",
+    ])
+
+    # Gratitude phrases that indicate conversational closing, not actual requests
+    GRATITUDE_PHRASES = frozenset([
+        "thanks for", "thank you for", "thanks for your", "thank you for your",
+        "thanks for the", "thank you for the", "appreciate your", "grateful for",
     ])
 
     def matches_task(self, task_description: str) -> float:
@@ -117,6 +136,12 @@ class Capability:
             Score from 0.0 to 1.0
         """
         task_lower = task_description.lower()
+
+        # Check for gratitude phrases (conversational closing, not requests)
+        for phrase in self.GRATITUDE_PHRASES:
+            if phrase in task_lower:
+                return 0.0
+
         # Filter task words: remove stop words and short words
         task_words = {
             w for w in task_lower.split()
@@ -543,6 +568,9 @@ class CapabilityRegistry:
             # Determine tags from name
             tags = self._infer_tool_tags(name)
 
+            # Determine intents from name
+            intents = self._infer_tool_intents(name)
+
             capabilities.append(
                 Capability(
                     name=name,
@@ -552,6 +580,7 @@ class CapabilityRegistry:
                     when_to_use=when_to_use,
                     handler=None,  # Tools are executed by tool_executor
                     tags=tags,
+                    intents=intents,
                 )
             )
 
@@ -589,6 +618,25 @@ class CapabilityRegistry:
                 tags.extend(tool_tags)
 
         return tags
+
+    def _infer_tool_intents(self, name: str) -> List[str]:
+        """Infer intents from tool name to match INTENT_PATTERNS."""
+        intent_map = {
+            "file_read": ["read", "show", "view", "display", "cat", "open", "see"],
+            "file_write": ["write", "save", "create", "export", "output", "generate", "store"],
+            "file_edit": ["edit", "modify", "change", "update", "fix"],
+            "file_glob": ["search"],
+            "file_grep": ["search"],
+            "bash_exec": ["execute"],
+            "python_exec": ["execute"],
+            "web_search": ["research", "search"],
+            "web_fetch": ["research"],
+            "show_help": ["help"],
+            "show_status": ["read"],
+            "show_logs": ["read"],
+        }
+
+        return intent_map.get(name, [])
 
     def _discover_mcp_servers(self) -> List[Capability]:
         """Discover MCP servers from configuration."""
@@ -788,16 +836,17 @@ class CapabilityRegistry:
             "research", "investigate", "look up", "find out", "search online",
             "search for", "search the", "web search", "look for", "find information",
             # Question patterns that need live/current information
-            "what is the", "what's the", "how much is", "how much does",
+            "what is the", "what's the", "whats the", "how much is", "how much does",
             "current price", "latest price", "today's price", "price of",
-            "stock price", "share price", "market price",
-            "latest news", "recent news", "current news",
+            "stock price", "share price", "market price", "nifty", "sensex",
+            "latest news", "recent news", "current news", "latest",
             "weather in", "weather for", "weather today",
             "who is", "who are", "when is", "when was", "where is",
             "tell me about", "information about", "info on", "details about",
         ],
         "compare": ["compare", "contrast", "versus", "vs", "difference", "competitor"],
-        "read": ["read", "show", "display", "view", "cat", "open", "see"],
+        "help": ["help", "show help", "/help", "how to", "how do i", "what can you", "commands"],
+        "read": ["read", "display", "view", "cat", "open", "see"],  # Removed "show" - too ambiguous
         "write": ["write", "save", "create", "export", "output", "generate", "store"],
         "edit": ["edit", "modify", "change", "update", "fix"],
         "execute": ["run", "execute", "eval", "compute", "calculate"],
@@ -913,6 +962,12 @@ class CapabilityRegistry:
         """
         if not self._capabilities and not self._cleared:
             self.discover_all()
+
+        # Check for gratitude phrases (conversational closing, not requests)
+        query_lower = query.lower()
+        for phrase in Capability.GRATITUDE_PHRASES:
+            if phrase in query_lower:
+                return []  # Return empty for gratitude phrases
 
         # Detect intents and file types from query
         detected_intents = set(self.detect_intents(query))
