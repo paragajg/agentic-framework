@@ -573,14 +573,41 @@ Product Manager Agent ↔ Engineering Agent ↔ QA Agent
 
 ### Supported Providers (6)
 
-| Provider | Type | Models | Best For | Cost |
-|----------|------|--------|----------|------|
-| **Anthropic** | Cloud | Claude Opus 4.5, Sonnet 4.5, Haiku 4 | Enterprise, reasoning | $3-15/M tokens |
-| **OpenAI** | Cloud | GPT-4o, GPT-4o-mini | General purpose | $2.50-15/M tokens |
-| **Azure OpenAI** | Cloud | GPT-4o, GPT-4 Turbo | Enterprise Azure | $2.50-15/M tokens |
-| **Google Gemini** | Cloud | Gemini 2.0 Flash, 1.5 Pro | Multimodal, cost-effective | $0.075-7/M tokens |
-| **Ollama** | Local | Llama 3.1, Mistral, Mixtral | Privacy, offline | $0 (self-hosted) |
+| Provider | Type | Models | Best For | Cost (per M tokens) |
+|----------|------|--------|----------|---------------------|
+| **Anthropic** | Cloud | Claude Opus 4.5, Sonnet 4, Haiku 4.5 | Enterprise, reasoning | $1-25 (input) / $5-75 (output) |
+| **OpenAI** | Cloud | GPT-4o, GPT-4o-mini, o1, o3-mini | General purpose | $0.15-15 (input) / $0.60-60 (output) |
+| **Azure OpenAI** | Cloud | GPT-4o, GPT-4o-mini | Enterprise Azure | $0.15-2.50 (input) / $0.60-10 (output) |
+| **Google Gemini** | Cloud | Gemini 2.5 Pro, 2.5 Flash, 2.0 Flash | Multimodal, cost-effective | $0.10-2.50 (input) / $0.40-15 (output) |
+| **Ollama** | Local | Llama 3.3, Mistral, Mixtral, Qwen | Privacy, offline | $0 (self-hosted) |
 | **vLLM** | Local | Any HuggingFace model | High performance | $0 (self-hosted) |
+
+#### Detailed Pricing Breakdown (January 2025)
+
+**Anthropic Claude** (per million tokens):
+| Model | Input | Output |
+|-------|-------|--------|
+| Claude Opus 4.5 | $5.00 | $25.00 |
+| Claude Sonnet 4 | $3.00 | $15.00 |
+| Claude Haiku 4.5 | $1.00 | $5.00 |
+| Claude Haiku 3.5 | $0.80 | $4.00 |
+
+**OpenAI** (per million tokens):
+| Model | Input | Output |
+|-------|-------|--------|
+| GPT-4o | $2.50 | $10.00 |
+| GPT-4o-mini | $0.15 | $0.60 |
+| o1 | $15.00 | $60.00 |
+| o3-mini | $1.10 | $4.40 |
+
+**Google Gemini** (per million tokens):
+| Model | Input | Output |
+|-------|-------|--------|
+| Gemini 2.5 Pro | $1.25 | $10.00 |
+| Gemini 2.5 Flash | $0.15 | $0.60 |
+| Gemini 2.0 Flash | $0.10 | $0.40 |
+
+> **Note**: Prices are subject to change. Check official provider pricing pages for the most current rates. Batch API and prompt caching can reduce costs by 50% or more.
 
 ### Quick Provider Switch
 
