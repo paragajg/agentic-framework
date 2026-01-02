@@ -1,12 +1,79 @@
 name: python_exec
 version: 1.0.0
-description: Execute Python code in an isolated environment with timeout protection
+description: |
+  Execute Python code in an isolated environment with timeout protection.
+  Use for generating binary files (Word, Excel, PDF), data transformations,
+  complex calculations, and any task requiring programmatic logic.
+
 safety_flags:
   - side_effect
   - external_call
 requires_approval: true
 handler: handler.execute_python
+
 tags:
   - execution
   - python
+  - code
+  - generate
+  - transform
   - prepackaged
+
+# Tier 1: Lightweight metadata for fast pre-filtering
+tier1:
+  short_description: Execute Python code for file generation and data processing
+  category: code_execution
+  priority: 2
+  file_types:
+    - .docx
+    - .xlsx
+    - .pptx
+    - .pdf
+    - .csv
+    - .json
+    - .xml
+    - .html
+    - .png
+    - .jpg
+  intents:
+    - generate
+    - create
+    - convert
+    - transform
+    - calculate
+    - process
+    - build
+    - render
+    - export
+    - format
+
+# Tier 2: Rich metadata for LLM decision-making
+when_to_use: |
+  USE THIS SKILL WHEN:
+  - Creating Word documents (.docx) with python-docx
+  - Creating Excel files (.xlsx) with openpyxl or pandas
+  - Creating PowerPoint presentations (.pptx) with python-pptx
+  - Generating PDF files with reportlab or fpdf
+  - Converting between file formats
+  - Performing complex data transformations
+  - Running calculations that require Python libraries
+  - Building charts or visualizations
+  - Processing data that requires programmatic logic
+  - Any task that plain text file_write cannot handle
+
+when_not_to_use: |
+  DO NOT USE THIS SKILL WHEN:
+  - Simply writing plain text or markdown files (use file_write instead)
+  - Reading files (use file_read instead)
+  - Searching files (use file_grep or file_glob instead)
+  - Running shell commands (use bash_exec instead)
+  - The task can be done with simpler tools
+
+examples:
+  - "Create a Word document with formatted tables"
+  - "Generate an Excel report with charts"
+  - "Convert CSV data to formatted Excel"
+  - "Build a PowerPoint presentation"
+  - "Create a PDF report with styling"
+  - "Transform JSON data into a Word document"
+  - "Generate a chart image from data"
