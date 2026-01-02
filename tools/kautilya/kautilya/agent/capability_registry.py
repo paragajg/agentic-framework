@@ -22,6 +22,13 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+# Ensure skills directory is in Python path for relative imports
+_project_root = Path(__file__).parents[4]  # capability_registry -> agent -> kautilya -> kautilya -> tools -> agent-framework
+_skills_dir = _project_root / "code-exec" / "skills"
+if _skills_dir.exists() and str(_skills_dir) not in sys.path:
+    sys.path.insert(0, str(_skills_dir))
+    logger.debug(f"Added skills directory to sys.path: {_skills_dir}")
+
 
 @dataclass
 class Capability:
@@ -314,32 +321,89 @@ class CapabilityRegistry:
             return None
 
     def _load_handler(self, handler_path: Path, skill_name: str) -> Optional[Callable]:
-        """Load skill handler function."""
-        try:
-            spec = importlib.util.spec_from_file_location(
-                f"skill_{skill_name}_handler",
-                handler_path,
-            )
-            if not spec or not spec.loader:
-                return None
+        """Load skill handler function.
 
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[f"skill_{skill_name}_handler"] = module
-            spec.loader.exec_module(module)
+        Handles both simple skills and package-style skills with relative imports.
+        """
+        import importlib
+        import inspect
+
+        skill_path = handler_path.parent
+        normalized_name = skill_name.replace("-", "_")
+
+        try:
+            # Check if skill has an __init__.py (is a package) or subpackages
+            init_path = skill_path / "__init__.py"
+            has_init = init_path.exists()
+            has_subpackages = (skill_path / "components").exists() or (skill_path / "pipelines").exists()
+
+            if has_init or has_subpackages:
+                # Package-style skill - import as a package
+                # Make sure parent directory is in path
+                skill_parent = skill_path.parent
+                if str(skill_parent) not in sys.path:
+                    sys.path.insert(0, str(skill_parent))
+
+                try:
+                    # Try importing as a package first
+                    pkg = importlib.import_module(normalized_name)
+                    # Now import the handler from within the package
+                    handler_module = importlib.import_module(f"{normalized_name}.handler")
+                except ImportError:
+                    # If that fails, create the package structure manually
+                    pkg_spec = importlib.util.spec_from_file_location(
+                        normalized_name,
+                        init_path if has_init else handler_path,
+                        submodule_search_locations=[str(skill_path)],
+                    )
+                    pkg = importlib.util.module_from_spec(pkg_spec)
+                    pkg.__path__ = [str(skill_path)]
+                    sys.modules[normalized_name] = pkg
+                    if has_init:
+                        pkg_spec.loader.exec_module(pkg)
+
+                    # Now load the handler
+                    handler_spec = importlib.util.spec_from_file_location(
+                        f"{normalized_name}.handler",
+                        handler_path,
+                    )
+                    handler_module = importlib.util.module_from_spec(handler_spec)
+                    handler_module.__package__ = normalized_name
+                    sys.modules[f"{normalized_name}.handler"] = handler_module
+                    handler_spec.loader.exec_module(handler_module)
+            else:
+                # Simple skill - load directly
+                spec = importlib.util.spec_from_file_location(
+                    f"skill_{normalized_name}_handler",
+                    handler_path,
+                )
+                if not spec or not spec.loader:
+                    return None
+                handler_module = importlib.util.module_from_spec(spec)
+                sys.modules[f"skill_{normalized_name}_handler"] = handler_module
+                spec.loader.exec_module(handler_module)
 
             # Look for handler function with skill name or default names
-            handler_names = [skill_name, "handler", "run", "execute", "main"]
+            handler_names = [normalized_name, skill_name, "handler", "run", "execute", "main"]
             for name in handler_names:
-                if hasattr(module, name):
-                    handler = getattr(module, name)
-                    if callable(handler):
+                if hasattr(handler_module, name):
+                    handler = getattr(handler_module, name)
+                    if inspect.isfunction(handler):
                         self._skills_cache[skill_name] = handler
                         return handler
+
+            # Find the first actual function (not types or imports)
+            for name in dir(handler_module):
+                if not name.startswith("_"):
+                    obj = getattr(handler_module, name)
+                    if inspect.isfunction(obj):
+                        self._skills_cache[skill_name] = obj
+                        return obj
 
             return None
 
         except Exception as e:
-            logger.warning(f"Failed to load handler from {handler_path}: {e}")
+            logger.debug(f"Could not load handler from {handler_path}: {e}")
             return None
 
     def _build_when_to_use(

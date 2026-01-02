@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 _project_root = Path(__file__).parents[3]  # kautilya(dir) -> tools -> agent-framework
 _skill_registry_path = _project_root / "code-exec" / "service" / "skill_registry.py"
 
+# Ensure skills directory is in Python path for relative imports
+_skills_dir = _project_root / "code-exec" / "skills"
+if _skills_dir.exists() and str(_skills_dir) not in sys.path:
+    sys.path.insert(0, str(_skills_dir))
+    logger.debug(f"Added skills directory to sys.path: {_skills_dir}")
+
 SkillRegistry = None
 if _skill_registry_path.exists():
     try:
@@ -363,7 +369,11 @@ class ToolExecutor:
         handler_path = skill_path / "handler.py"
         if not handler_path.exists():
             logger.warning(f"Skill handler not found: {handler_path}")
-            return None
+            return {
+                "success": False,
+                "error": f"Skill handler not found: {handler_path}",
+                "suggestion": f"Check if {skill_name}/handler.py exists in skills directory",
+            }
 
         try:
             import importlib

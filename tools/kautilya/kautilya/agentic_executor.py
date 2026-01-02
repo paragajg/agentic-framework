@@ -216,18 +216,34 @@ class AgenticExecutor:
         try:
             response_text = ""
             tools_used = []
+            usage_info = None
 
             # Use the LLM client directly with skill guidance prepended
             enhanced_query = f"{skill_guidance}\n\n[USER REQUEST]\n{query}"
 
             # KautilyaLLMClient.chat() is a generator - pass skill tools
-            for chunk in self._llm_client.chat(
+            # The generator yields strings and returns usage info at the end
+            chat_generator = self._llm_client.chat(
                 enhanced_query,
                 tool_executor=self._tool_executor,
                 additional_tools=skill_tools,
-            ):
-                if isinstance(chunk, str):
-                    response_text += chunk
+            )
+
+            # Iterate through the generator and capture the return value
+            try:
+                while True:
+                    chunk = next(chat_generator)
+                    if isinstance(chunk, str):
+                        response_text += chunk
+            except StopIteration as e:
+                # The return value is captured in e.value
+                if e.value and isinstance(e.value, dict):
+                    usage_info = e.value.get("usage")
+                    # Track tools from result
+                    if "tool_results" in e.value:
+                        for tr in e.value["tool_results"]:
+                            if tr.get("tool_call_id"):
+                                tools_used.append(tr.get("tool_call_id", "unknown"))
 
             duration = time.time() - start_time
 
@@ -240,6 +256,7 @@ class AgenticExecutor:
                 files_resolved=[],
                 duration=duration,
                 error=None,
+                usage=usage_info,
             ), progress_messages
 
         except Exception as e:
