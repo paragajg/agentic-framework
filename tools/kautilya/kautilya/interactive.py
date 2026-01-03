@@ -1479,15 +1479,17 @@ Type [bold green]/help[/bold green] for commands, or describe your task in natur
         try:
             file_size = path.stat().st_size
 
-            if file_size > self.MAX_FILE_SIZE:
-                max_size_mb = self.MAX_FILE_SIZE // (1024 * 1024)
-                return None, f"File too large (>{max_size_mb}MB)"
-
             # Binary documents should not be read as UTF-8 text
             # They will be processed by document_qa skill which handles extraction properly
+            # NOTE: Skip size check for binary docs since we don't load content into memory
             if self._is_binary_document(path):
                 # Return None for content, but no error (file is valid, just binary)
                 return None, None
+
+            # For text files, enforce size limit to prevent memory/token issues
+            if file_size > self.MAX_FILE_SIZE:
+                max_size_mb = self.MAX_FILE_SIZE // (1024 * 1024)
+                return None, f"File too large (>{max_size_mb}MB)"
 
             # Text files - read normally
             with open(path, "r", encoding="utf-8", errors="replace") as f:
