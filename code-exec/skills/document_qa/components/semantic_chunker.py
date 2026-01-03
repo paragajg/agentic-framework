@@ -24,15 +24,23 @@ class SemanticChunker:
 
     Features:
     - Detects structure: headings, tables, lists, code blocks
-    - Never splits tables or code blocks mid-content
+    - Preserves tables and code blocks where possible (splits if too large)
     - Chunks by semantic boundaries (sections)
     - Adds overlap for context continuity
     - Preserves source metadata in each chunk
+    - Respects embedding model token limits (max 8000 tokens per chunk)
 
     Configuration via environment:
     - DOCUMENT_QA_CHUNK_SIZE: Target chunk size in tokens (default: 512)
     - DOCUMENT_QA_CHUNK_OVERLAP: Overlap between chunks (default: 50)
     """
+
+    # Maximum tokens per chunk for embedding models
+    # OpenAI text-embedding models have 8191 token limit; use 8000 for safety margin
+    # Conservative limit - OpenAI API limit is 8191, but our token estimation
+    # (len/4) can be off by 2x for certain content (unicode, special chars).
+    # Using 4000 to ensure we stay well under the limit.
+    MAX_EMBEDDING_TOKENS = 4000
 
     # Regex patterns for structure detection
     HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
@@ -114,19 +122,14 @@ class SemanticChunker:
             )
             chunks.extend(section_chunks)
 
-        # Add protected blocks as separate chunks
+        # Add protected blocks as chunks (split if too large for embedding model)
         for block_type, block_content, position in protected_blocks:
-            meta = {
-                **document.meta,
-                "chunk_type": block_type,
-                "is_protected": True,
-            }
-
-            chunk = Document(
-                content=block_content.strip(),
-                meta=meta,
+            block_chunks = self._chunk_protected_block(
+                content=block_content,
+                block_type=block_type,
+                base_meta=document.meta,
             )
-            chunks.append(chunk)
+            chunks.extend(block_chunks)
 
         # Sort chunks by original position if possible
         return chunks
@@ -243,7 +246,8 @@ class SemanticChunker:
         # Estimate tokens (rough: 1 token ≈ 4 chars for English)
         tokens = len(content) // 4
 
-        if tokens <= self.chunk_size:
+        # Safety check: even "small" sections must not exceed embedding limit
+        if tokens <= self.chunk_size and tokens <= self.MAX_EMBEDDING_TOKENS:
             # Single chunk for small sections
             meta = {
                 **base_meta,
@@ -251,6 +255,9 @@ class SemanticChunker:
                 "chunk_type": "text",
             }
             return [Document(content=content.strip(), meta=meta)]
+
+        # If section is larger than embedding limit, force split regardless of chunk_size
+        effective_chunk_size = min(self.chunk_size, self.MAX_EMBEDDING_TOKENS)
 
         # Need to split - use sentence boundaries
         chunks = []
@@ -262,7 +269,27 @@ class SemanticChunker:
         for sentence in sentences:
             sentence_tokens = len(sentence) // 4
 
-            if current_tokens + sentence_tokens > self.chunk_size and current_chunk:
+            # Safety: if a single sentence exceeds the limit, force-split it
+            if sentence_tokens > self.MAX_EMBEDDING_TOKENS:
+                # First, save any pending chunk
+                if current_chunk:
+                    chunk_text = " ".join(current_chunk)
+                    meta = {
+                        **base_meta,
+                        "section": section_title,
+                        "chunk_type": "text",
+                        "chunk_index": len(chunks),
+                    }
+                    chunks.append(Document(content=chunk_text.strip(), meta=meta))
+                    current_chunk = []
+                    current_tokens = 0
+
+                # Split the long sentence by character limit
+                split_chunks = self._force_split_text(sentence, section_title, base_meta, len(chunks))
+                chunks.extend(split_chunks)
+                continue
+
+            if current_tokens + sentence_tokens > effective_chunk_size and current_chunk:
                 # Save current chunk
                 chunk_text = " ".join(current_chunk)
                 meta = {
@@ -294,6 +321,36 @@ class SemanticChunker:
 
         return chunks
 
+    def _force_split_text(
+        self,
+        text: str,
+        section_title: Optional[str],
+        base_meta: Dict[str, Any],
+        start_index: int,
+    ) -> List[Document]:
+        """Force-split text that exceeds embedding limits by character count."""
+        max_chars = self.MAX_EMBEDDING_TOKENS * 4 - 100  # Leave margin
+        chunks = []
+
+        logger.warning(
+            f"Force-splitting oversized text ({len(text) // 4} tokens) "
+            f"into chunks of max {self.MAX_EMBEDDING_TOKENS} tokens"
+        )
+
+        for i in range(0, len(text), max_chars):
+            chunk_text = text[i:i + max_chars].strip()
+            if chunk_text:
+                meta = {
+                    **base_meta,
+                    "section": section_title,
+                    "chunk_type": "text",
+                    "chunk_index": start_index + len(chunks),
+                    "force_split": True,
+                }
+                chunks.append(Document(content=chunk_text, meta=meta))
+
+        return chunks
+
     def _split_sentences(self, content: str) -> List[str]:
         """Split content into sentences."""
         # Simple sentence splitting on punctuation
@@ -314,6 +371,198 @@ class SemanticChunker:
             return combined
 
         return combined[-overlap_chars:]
+
+    def _chunk_protected_block(
+        self,
+        content: str,
+        block_type: str,
+        base_meta: Dict[str, Any],
+    ) -> List[Document]:
+        """
+        Chunk a protected block if it exceeds embedding model token limits.
+
+        Preserves block integrity where possible, but splits large blocks
+        to avoid embedding API failures.
+
+        Args:
+            content: The block content (table or code block)
+            block_type: Type of block ("table" or "code")
+            base_meta: Base metadata from parent document
+
+        Returns:
+            List of Document chunks
+        """
+        content = content.strip()
+        estimated_tokens = len(content) // 4
+
+        # If small enough, keep as single chunk
+        if estimated_tokens <= self.MAX_EMBEDDING_TOKENS:
+            return [Document(
+                content=content,
+                meta={**base_meta, "chunk_type": block_type, "is_protected": True}
+            )]
+
+        # Too large - must split (even though it's a protected block)
+        logger.warning(
+            f"Protected {block_type} block ({estimated_tokens} estimated tokens) exceeds "
+            f"embedding limit ({self.MAX_EMBEDDING_TOKENS}). Splitting into chunks..."
+        )
+
+        if block_type == "table":
+            return self._split_large_table(content, base_meta)
+        else:
+            return self._split_large_code_block(content, base_meta)
+
+    def _split_large_table(
+        self,
+        content: str,
+        base_meta: Dict[str, Any],
+    ) -> List[Document]:
+        """
+        Split a large table into multiple chunks by rows.
+
+        Preserves header row in each chunk for context.
+        """
+        lines = content.split("\n")
+        chunks = []
+
+        # Find header and separator
+        header_line = lines[0] if lines else ""
+        separator_line = lines[1] if len(lines) > 1 and self.TABLE_SEPARATOR.match(lines[1]) else ""
+        header_tokens = (len(header_line) + len(separator_line)) // 4
+
+        # Calculate max rows per chunk (leave room for header)
+        max_tokens_for_data = self.MAX_EMBEDDING_TOKENS - header_tokens - 100  # margin
+        max_chars_for_data = max_tokens_for_data * 4
+
+        # Start with header
+        current_chunk_lines = [header_line]
+        if separator_line:
+            current_chunk_lines.append(separator_line)
+        current_chars = len(header_line) + len(separator_line)
+
+        data_start = 2 if separator_line else 1
+
+        for i, line in enumerate(lines[data_start:], start=data_start):
+            line_chars = len(line)
+
+            if current_chars + line_chars > max_chars_for_data and len(current_chunk_lines) > 2:
+                # Save current chunk
+                chunk_content = "\n".join(current_chunk_lines)
+                chunks.append(Document(
+                    content=chunk_content,
+                    meta={
+                        **base_meta,
+                        "chunk_type": "table",
+                        "is_protected": True,
+                        "chunk_index": len(chunks),
+                        "split_from_large_table": True,
+                    }
+                ))
+
+                # Start new chunk with header
+                current_chunk_lines = [header_line]
+                if separator_line:
+                    current_chunk_lines.append(separator_line)
+                current_chars = len(header_line) + len(separator_line)
+
+            current_chunk_lines.append(line)
+            current_chars += line_chars
+
+        # Save last chunk
+        if len(current_chunk_lines) > (2 if separator_line else 1):
+            chunk_content = "\n".join(current_chunk_lines)
+            chunks.append(Document(
+                content=chunk_content,
+                meta={
+                    **base_meta,
+                    "chunk_type": "table",
+                    "is_protected": True,
+                    "chunk_index": len(chunks),
+                    "split_from_large_table": True,
+                }
+            ))
+
+        logger.info(f"Split large table into {len(chunks)} chunks")
+        return chunks
+
+    def _split_large_code_block(
+        self,
+        content: str,
+        base_meta: Dict[str, Any],
+    ) -> List[Document]:
+        """
+        Split a large code block into multiple chunks by lines.
+
+        Preserves code fence markers and adds context about continuation.
+        """
+        chunks = []
+
+        # Extract language from code fence if present
+        lines = content.split("\n")
+        language = ""
+        code_start = 0
+        code_end = len(lines)
+
+        if lines and lines[0].startswith("```"):
+            language = lines[0][3:].strip()
+            code_start = 1
+
+        if lines and lines[-1].strip() == "```":
+            code_end = len(lines) - 1
+
+        code_lines = lines[code_start:code_end]
+
+        # Calculate max lines per chunk
+        fence_overhead = len(f"```{language}\n") + len("\n```") + 50  # margin for context
+        max_chars_per_chunk = (self.MAX_EMBEDDING_TOKENS * 4) - fence_overhead
+
+        current_chunk_lines = []
+        current_chars = 0
+
+        for i, line in enumerate(code_lines):
+            line_chars = len(line) + 1  # +1 for newline
+
+            if current_chars + line_chars > max_chars_per_chunk and current_chunk_lines:
+                # Save current chunk
+                chunk_content = f"```{language}\n" + "\n".join(current_chunk_lines) + "\n```"
+                chunks.append(Document(
+                    content=chunk_content,
+                    meta={
+                        **base_meta,
+                        "chunk_type": "code",
+                        "is_protected": True,
+                        "chunk_index": len(chunks),
+                        "split_from_large_code": True,
+                        "code_language": language,
+                    }
+                ))
+
+                # Start new chunk with overlap (last few lines for context)
+                overlap_lines = current_chunk_lines[-3:] if len(current_chunk_lines) > 3 else []
+                current_chunk_lines = overlap_lines
+                current_chars = sum(len(l) + 1 for l in overlap_lines)
+
+            current_chunk_lines.append(line)
+            current_chars += line_chars
+
+        # Save last chunk
+        if current_chunk_lines:
+            chunk_content = f"```{language}\n" + "\n".join(current_chunk_lines) + "\n```"
+            chunks.append(Document(
+                content=chunk_content,
+                meta={
+                    **base_meta,
+                    "chunk_type": "code",
+                    "is_protected": True,
+                    "chunk_index": len(chunks),
+                    "split_from_large_code": True,
+                    "code_language": language,
+                }
+            ))
+
+        logger.info(f"Split large code block into {len(chunks)} chunks")
+        return chunks
 
 
 def chunk_text(

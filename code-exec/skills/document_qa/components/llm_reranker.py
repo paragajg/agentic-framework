@@ -78,7 +78,8 @@ Respond with ONLY a JSON array:
         llm_client: Optional[Any] = None,
         top_k: int = 5,
         batch_size: int = 5,
-        min_score: float = 3.0,
+        min_score: float = 1.0,
+        max_retries: int = 2,
     ):
         """
         Initialize the LLM Reranker.
@@ -87,16 +88,19 @@ Respond with ONLY a JSON array:
             llm_client: LLM client for reranking (uses OpenAI if not provided)
             top_k: Number of top documents to return
             batch_size: Number of documents to score in one LLM call
-            min_score: Minimum score to include in results
+            min_score: Minimum score to include in results (default: 1.0)
+            max_retries: Maximum retries on API failure
         """
         self.llm_client = llm_client
         self.top_k = top_k
         self.batch_size = batch_size
         self.min_score = min_score
+        self.max_retries = max_retries
 
         # Statistics
         self._total_scored = 0
         self._llm_calls = 0
+        self._failed_scores = 0
 
     @component.output_types(documents=List[Document])
     def run(
@@ -133,6 +137,14 @@ Respond with ONLY a JSON array:
             for doc, score, reason in scored_docs
             if score >= self.min_score
         ][:top_k]
+
+        # Fallback: if no docs pass min_score, return top_k by score anyway
+        if not filtered and scored_docs:
+            logger.warning(
+                f"No documents passed min_score={self.min_score}. "
+                f"Returning top {top_k} documents regardless of score."
+            )
+            filtered = scored_docs[:top_k]
 
         # Update document metadata with scores
         result_docs = []
@@ -188,7 +200,9 @@ Respond with ONLY a JSON array:
 
         except Exception as e:
             logger.warning(f"Failed to score document: {e}")
-            return 0.0, "scoring_failed"
+            self._failed_scores += 1
+            # Use neutral score (5.0) instead of 0.0 so document isn't filtered out
+            return 5.0, "scoring_failed_neutral"
 
     def _score_batch(
         self, query: str, documents: List[Document]
@@ -211,6 +225,11 @@ Respond with ONLY a JSON array:
             # Parse batch response
             scores = self._parse_batch_response(response, len(documents))
 
+            # Check if we got valid scores
+            if not scores:
+                logger.warning("Batch response parsing failed, falling back to individual scoring")
+                return self._score_individually(query, documents)
+
             results = []
             for i, doc in enumerate(documents):
                 score_data = scores.get(i + 1, {"score": 0, "reason": "not_scored"})
@@ -222,9 +241,20 @@ Respond with ONLY a JSON array:
             return results
 
         except Exception as e:
-            logger.warning(f"Batch scoring failed: {e}")
-            # Fall back to individual scoring
-            return [(doc, 0.0, "batch_failed") for doc in documents]
+            logger.warning(f"Batch scoring failed: {e}, falling back to individual scoring")
+            # Fall back to individual scoring instead of returning 0.0
+            return self._score_individually(query, documents)
+
+    def _score_individually(
+        self, query: str, documents: List[Document]
+    ) -> List[Tuple[Document, float, str]]:
+        """Score documents individually (fallback when batch fails)."""
+        results = []
+        for doc in documents:
+            score, reason = self._score_single(query, doc)
+            results.append((doc, score, reason))
+            self._total_scored += 1
+        return results
 
     def _call_llm(self, prompt: str) -> str:
         """
@@ -258,17 +288,40 @@ Respond with ONLY a JSON array:
 
     def _call_with_adapter(self, prompt: str) -> str:
         """
-        Use LLM adapter factory.
+        Use LLM adapter factory with retry logic.
 
         Creates adapter from .env configuration (provider-agnostic).
+        Retries on transient failures with exponential backoff.
         """
-        try:
-            adapter = create_sync_adapter()
-            logger.debug(f"LLMReranker using adapter with model: {adapter.model}")
-            return adapter.complete_text(prompt, temperature=0, max_tokens=200)
-        except Exception as e:
-            logger.error(f"Adapter creation failed: {e}")
-            raise
+        import time
+
+        last_error = None
+        adapter = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                if adapter is None:
+                    adapter = create_sync_adapter()
+                    logger.debug(f"LLMReranker using adapter with model: {adapter.model}")
+
+                return adapter.complete_text(prompt, temperature=0, max_tokens=200)
+
+            except Exception as e:
+                last_error = e
+                self._failed_scores += 1
+
+                if attempt < self.max_retries:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(
+                        f"LLM call failed (attempt {attempt + 1}/{self.max_retries + 1}): {e}. "
+                        f"Retrying in {wait_time}s..."
+                    )
+                    time.sleep(wait_time)
+                    adapter = None  # Reset adapter for retry
+                else:
+                    logger.error(f"LLM call failed after {self.max_retries + 1} attempts: {e}")
+
+        raise last_error
 
     def _parse_score_response(self, response: str) -> Tuple[float, str]:
         """Parse single score response."""
