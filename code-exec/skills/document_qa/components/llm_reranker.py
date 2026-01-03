@@ -78,7 +78,7 @@ Respond with ONLY a JSON array:
         self,
         llm_client: Optional[Any] = None,
         top_k: int = 5,
-        batch_size: int = 5,
+        batch_size: int = 1,  # Disabled batch scoring (use parallel individual scoring instead)
         min_score: float = 1.0,
         max_retries: int = 2,
         max_concurrent: int = 10,
