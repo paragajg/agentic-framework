@@ -154,7 +154,7 @@ class InteractiveMode:
         self.last_query_stats = None
 
         # Attached file context storage
-        self.attached_context: Dict[str, str] = {}  # path -> content
+        self.attached_context: Dict[str, Optional[str]] = {}  # path -> content (None for binary docs)
         self.attached_stats: Dict[str, dict] = {}  # path -> {size, lines, type}
 
         # Initialize memory manager
@@ -679,8 +679,20 @@ class InteractiveMode:
                 if not live_content_displayed:
                     console.print()
                     console.print(Markdown(response_text))
-                # Note: If content was shown via Live, we don't re-print even for citations
-                # to avoid duplication. Citations will appear in future queries.
+                else:
+                    # Content was shown via Live but citations were injected after
+                    # Show a brief inline citation note if sources were found
+                    if sources:
+                        citation_refs = []
+                        for i, s in enumerate(sources[:5], 1):
+                            loc = Path(s.location).name if '/' in s.location else s.location[:30]
+                            citation_refs.append(f"[{i}] {loc}")
+                        if citation_refs:
+                            from rich.text import Text
+                            console.print()
+                            console.print(Text.from_markup(
+                                f"[dim]📎 Inline citations: {' • '.join(citation_refs)}[/dim]"
+                            ))
                 console.print()
             else:
                 # No response content - agent might have only executed tools
@@ -1411,6 +1423,8 @@ Type [bold green]/help[/bold green] for commands, or describe your task in natur
         ".md", ".rst", ".txt", ".adoc",
         # Data files
         ".csv", ".sql",
+        # Binary documents (processed via document_qa skill)
+        ".pdf", ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt",
         # Other
         ".dockerfile", ".gitignore", ".editorconfig", ".prettierrc",
     }
@@ -1423,14 +1437,14 @@ Type [bold green]/help[/bold green] for commands, or describe your task in natur
         "*.zip", "*.tar", "*.gz", "*.rar", "*.7z",
         "*.png", "*.jpg", "*.jpeg", "*.gif", "*.ico", "*.svg", "*.webp",
         "*.mp3", "*.mp4", "*.wav", "*.avi", "*.mov",
-        "*.pdf", "*.doc", "*.docx", "*.xls", "*.xlsx", "*.ppt", "*.pptx",
+        # Note: PDF, DOCX, XLSX are now attachable (processed by document_qa)
         ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build",
         "*.egg-info", ".tox", ".coverage", "htmlcov",
     }
 
     # Maximum limits
-    MAX_FILE_SIZE = 1024 * 1024  # 1MB per file
-    MAX_TOTAL_SIZE = 10 * 1024 * 1024  # 10MB total
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB per file (increased for PDFs/documents)
+    MAX_TOTAL_SIZE = 50 * 1024 * 1024  # 50MB total (increased for multiple documents)
     MAX_FILES = 100  # Maximum number of files
 
     def _should_skip_path(self, path: Path) -> bool:
@@ -1451,12 +1465,31 @@ Type [bold green]/help[/bold green] for commands, or describe your task in natur
             return path.name in config_names
         return path.suffix.lower() in self.ATTACHABLE_EXTENSIONS
 
-    def _read_file_safe(self, path: Path) -> Tuple[Optional[str], Optional[str]]:
-        """Safely read a file, returning (content, error)."""
-        try:
-            if path.stat().st_size > self.MAX_FILE_SIZE:
-                return None, f"File too large (>{self.MAX_FILE_SIZE // 1024}KB)"
+    def _is_binary_document(self, path: Path) -> bool:
+        """Check if file is a binary document (PDF, DOCX, etc.)."""
+        return path.suffix.lower() in self.DOCUMENT_EXTENSIONS
 
+    def _read_file_safe(self, path: Path) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Safely read a file, returning (content, error).
+
+        For binary documents (PDF, DOCX, etc.), returns None as content
+        since they should be processed by document_qa skill, not read as text.
+        """
+        try:
+            file_size = path.stat().st_size
+
+            if file_size > self.MAX_FILE_SIZE:
+                max_size_mb = self.MAX_FILE_SIZE // (1024 * 1024)
+                return None, f"File too large (>{max_size_mb}MB)"
+
+            # Binary documents should not be read as UTF-8 text
+            # They will be processed by document_qa skill which handles extraction properly
+            if self._is_binary_document(path):
+                # Return None for content, but no error (file is valid, just binary)
+                return None, None
+
+            # Text files - read normally
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
             return content, None
@@ -1491,33 +1524,55 @@ Type [bold green]/help[/bold green] for commands, or describe your task in natur
             return False, f"Skipped (excluded pattern): {path.name}"
 
         if not self._is_attachable_file(path):
-            return False, f"Unsupported file type: {path.suffix or 'no extension'}"
+            # Special case: Allow binary documents even if not in ATTACHABLE_EXTENSIONS
+            # They will be processed by document_qa skill
+            if not self._is_binary_document(path):
+                return False, f"Unsupported file type: {path.suffix or 'no extension'}"
+
+        # Get file size from stat (works for both text and binary files)
+        file_size = path.stat().st_size
 
         # Check total size limit
-        current_total = sum(len(c) for c in self.attached_context.values())
-        if current_total >= self.MAX_TOTAL_SIZE:
-            return False, "Total attachment size limit reached (10MB)"
+        # For binary documents, use file size; for text files, use content length
+        current_total = sum(
+            len(c) if c is not None else 0 for c in self.attached_context.values()
+        )
+        if current_total + file_size >= self.MAX_TOTAL_SIZE:
+            max_total_mb = self.MAX_TOTAL_SIZE // (1024 * 1024)
+            return False, f"Total attachment size limit reached ({max_total_mb}MB)"
 
         # Check file count limit
         if len(self.attached_context) >= self.MAX_FILES:
             return False, f"Maximum file limit reached ({self.MAX_FILES} files)"
 
-        # Read file
+        # Read file (returns None for binary documents, actual content for text)
         content, error = self._read_file_safe(path)
         if error:
             return False, error
 
         # Store with absolute path as key
         abs_path = str(path.absolute())
+        is_binary = self._is_binary_document(path)
+
+        # For binary documents, store None as content (metadata only)
+        # For text files, store actual content
         self.attached_context[abs_path] = content
+
+        # Store metadata
         self.attached_stats[abs_path] = {
-            "size": len(content),
-            "lines": content.count("\n") + 1,
+            "size": file_size if is_binary else len(content) if content else 0,
+            "lines": 0 if is_binary else (content.count("\n") + 1 if content else 0),
             "type": self._get_file_type(path),
             "name": path.name,
+            "is_binary": is_binary,
         }
 
-        return True, f"Attached: {path.name} ({len(content):,} bytes)"
+        file_size_kb = file_size / 1024
+        if is_binary:
+            return True, f"Attached: {path.name} ({file_size_kb:.1f}KB, binary document)"
+        else:
+            content_size = len(content) if content else 0
+            return True, f"Attached: {path.name} ({content_size:,} bytes)"
 
     def _attach_folder(self, folder: Path, recursive: bool = True) -> List[Tuple[str, bool, str]]:
         """Attach all eligible files from a folder."""
@@ -1560,9 +1615,14 @@ Type [bold green]/help[/bold green] for commands, or describe your task in natur
                     results.append(("", False, f"Stopped: max file limit ({self.MAX_FILES})"))
                     break
 
-                current_total = sum(len(c) for c in self.attached_context.values())
+                # Calculate total size (handle None content for binary docs)
+                current_total = sum(
+                    len(c) if c is not None else self.attached_stats.get(p, {}).get("size", 0)
+                    for p, c in self.attached_context.items()
+                )
                 if current_total >= self.MAX_TOTAL_SIZE:
-                    results.append(("", False, "Stopped: max size limit (10MB)"))
+                    max_total_mb = self.MAX_TOTAL_SIZE // (1024 * 1024)
+                    results.append(("", False, f"Stopped: max size limit ({max_total_mb}MB)"))
                     break
 
         return results
@@ -1612,31 +1672,128 @@ Type [bold green]/help[/bold green] for commands, or describe your task in natur
 
         return cleaned_text, attached_paths
 
+    # Document extensions that should be processed via document_qa, not context prepending
+    DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt"}
+
+    # Maximum tokens to include in context (leave room for query + skill guidance)
+    MAX_CONTEXT_TOKENS = 4000  # ~16KB of text
+
     def _build_context_prompt(self) -> str:
-        """Build the context prompt from attached files."""
+        """
+        Build the context prompt from attached files.
+
+        For small text/code files: Include content directly in prompt
+        For large document files (PDF, DOCX, etc.): Include metadata only,
+        instruct LLM to use document_qa skill for processing.
+
+        This prevents token limit errors when large documents are attached.
+        """
         if not self.attached_context:
             return ""
 
         lines = ["[ATTACHED FILES CONTEXT]"]
-        lines.append(f"The following {len(self.attached_context)} file(s) have been attached for reference:\n")
+
+        # Separate files into categories
+        document_files = []  # PDF, DOCX, etc. - process via document_qa
+        text_files = []  # Code, config, text - include in context
 
         for path, content in self.attached_context.items():
+            ext = Path(path).suffix.lower()
             stats = self.attached_stats.get(path, {})
-            filename = stats.get("name", Path(path).name)
-            file_type = stats.get("type", "Unknown")
-            line_count = stats.get("lines", 0)
 
-            lines.append(f"--- FILE: {filename} ({file_type}, {line_count} lines) ---")
-            lines.append(f"Path: {path}")
-            lines.append("```")
-            # Truncate very large files in context
-            if len(content) > 50000:
-                lines.append(content[:50000])
-                lines.append(f"\n... [truncated, {len(content) - 50000:,} more bytes] ...")
+            # For binary documents, content is None (stored metadata only)
+            # For text files, content contains actual file content
+            if content is None:
+                # Binary document - use size from stats
+                size = stats.get("size", 0)
+                tokens = size // 4  # Rough estimate based on file size
             else:
-                lines.append(content)
-            lines.append("```")
-            lines.append("")
+                # Text file - use content length
+                size = len(content)
+                tokens = size // 4
+
+            file_info = {
+                "path": path,
+                "content": content,
+                "filename": stats.get("name", Path(path).name),
+                "file_type": stats.get("type", "Unknown"),
+                "line_count": stats.get("lines", 0),
+                "size": size,
+                "tokens": tokens,
+            }
+
+            if ext in self.DOCUMENT_EXTENSIONS:
+                document_files.append(file_info)
+            else:
+                text_files.append(file_info)
+
+        # Handle document files (PDF, DOCX, etc.) - metadata only
+        if document_files:
+            lines.append(f"\n[DOCUMENT FILES - {len(document_files)} file(s)]")
+            lines.append("These documents are attached and ready for analysis.")
+            lines.append("Use the document_qa skill to extract information from these files.\n")
+
+            for doc in document_files:
+                lines.append(f"  📄 {doc['filename']}")
+                lines.append(f"     Path: {doc['path']}")
+                lines.append(f"     Size: {doc['size']:,} bytes (~{doc['tokens']:,} tokens)")
+                lines.append("")
+
+            lines.append("[IMPORTANT] For questions about these documents, call the document_qa skill")
+            lines.append("with the exact file paths listed above. Do NOT ask the user for the content.\n")
+
+        # Handle text files - include content with token budget
+        if text_files:
+            lines.append(f"\n[TEXT FILES - {len(text_files)} file(s)]")
+            lines.append("The following file contents are included for reference:\n")
+
+            remaining_tokens = self.MAX_CONTEXT_TOKENS
+            included_count = 0
+            truncated_files = []
+
+            # Sort by size (smallest first) to maximize files included
+            text_files.sort(key=lambda x: x["size"])
+
+            for file_info in text_files:
+                file_tokens = file_info["tokens"]
+
+                if remaining_tokens <= 100:
+                    # No room left, skip remaining files
+                    truncated_files.append(file_info)
+                    continue
+
+                lines.append(f"--- FILE: {file_info['filename']} ({file_info['file_type']}, {file_info['line_count']} lines) ---")
+                lines.append(f"Path: {file_info['path']}")
+                lines.append("```")
+
+                if file_tokens <= remaining_tokens:
+                    # Include full content
+                    lines.append(file_info["content"])
+                    remaining_tokens -= file_tokens
+                else:
+                    # Truncate to fit remaining budget
+                    max_chars = remaining_tokens * 4
+                    truncated = file_info["content"][:max_chars]
+                    # Try to truncate at line boundary
+                    last_newline = truncated.rfind("\n")
+                    if last_newline > max_chars * 0.7:
+                        truncated = truncated[:last_newline]
+                    lines.append(truncated)
+                    lines.append(f"\n... [truncated to fit context budget] ...")
+                    remaining_tokens = 0
+
+                lines.append("```")
+                lines.append("")
+                included_count += 1
+
+            # Note any files that couldn't be included
+            if truncated_files:
+                lines.append(f"[NOTE] {len(truncated_files)} additional file(s) not included due to context size limits:")
+                for f in truncated_files[:5]:
+                    lines.append(f"  - {f['filename']} ({f['tokens']:,} tokens)")
+                if len(truncated_files) > 5:
+                    lines.append(f"  ... and {len(truncated_files) - 5} more")
+                lines.append("")
 
         lines.append("[END ATTACHED FILES]\n")
         return "\n".join(lines)
@@ -1764,7 +1921,11 @@ Type [bold green]/help[/bold green] for commands, or describe your task in natur
         if not self.attached_context:
             return
 
-        total_size = sum(len(c) for c in self.attached_context.values())
+        # Calculate total size (handle None content for binary docs)
+        total_size = sum(
+            len(c) if c is not None else self.attached_stats.get(p, {}).get("size", 0)
+            for p, c in self.attached_context.items()
+        )
         total_lines = sum(s.get("lines", 0) for s in self.attached_stats.values())
 
         console.print(f"\n[bold cyan]📎 Attached Context[/bold cyan]")
