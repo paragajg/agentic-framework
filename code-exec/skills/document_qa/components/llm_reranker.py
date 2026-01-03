@@ -391,7 +391,7 @@ Respond with ONLY a JSON array:
     def _call_llm_sync(self, prompt: str) -> str:
         """Synchronous LLM call (for use in thread pool)."""
         adapter = create_sync_adapter()
-        return adapter.complete_text(prompt, temperature=0, max_tokens=200)
+        return adapter.complete_text(prompt, temperature=0, max_tokens=500)
 
     def _call_llm(self, prompt: str) -> str:
         """
@@ -408,7 +408,7 @@ Respond with ONLY a JSON array:
     def _call_with_client(self, prompt: str) -> str:
         """Use provided LLM client."""
         if isinstance(self.llm_client, SyncLLMWrapper):
-            return self.llm_client.complete_text(prompt, temperature=0, max_tokens=200)
+            return self.llm_client.complete_text(prompt, temperature=0, max_tokens=500)
         elif hasattr(self.llm_client, "complete_text"):
             return self.llm_client.complete_text(prompt)
         elif hasattr(self.llm_client, "complete"):
@@ -441,7 +441,7 @@ Respond with ONLY a JSON array:
                     adapter = create_sync_adapter()
                     logger.debug(f"LLMReranker using adapter with model: {adapter.model}")
 
-                return adapter.complete_text(prompt, temperature=0, max_tokens=200)
+                return adapter.complete_text(prompt, temperature=0, max_tokens=500)
 
             except Exception as e:
                 last_error = e
