@@ -31,6 +31,7 @@ if str(_repo_root) not in sys.path:
 from adapters.llm import create_sync_adapter, SyncLLMWrapper
 
 from ..components.context_assembler import ContextAssembler
+from ..components.embedding_adapter import EmbeddingAdapter, get_embedding_adapter
 from ..components.llm_reranker import LLMReranker
 from ..utils.source_tracker import SourceTracker
 
@@ -43,6 +44,7 @@ def create_generation_pipeline(
     retrieval_top_k: int = 15,
     rerank_top_k: int = 5,
     max_context_tokens: int = 6000,
+    reranker_max_concurrent: Optional[int] = None,
 ) -> Pipeline:
     """
     Create the Q&A generation pipeline.
@@ -65,10 +67,18 @@ def create_generation_pipeline(
         retrieval_top_k: Number of docs from each retriever
         rerank_top_k: Number of docs after reranking
         max_context_tokens: Maximum context tokens
+        reranker_max_concurrent: Maximum concurrent LLM calls for parallel reranking
+                                 (default: from env RERANKER_MAX_CONCURRENT or 10)
 
     Returns:
         Configured Haystack Pipeline
     """
+    import os
+
+    # Get max_concurrent from parameter, environment, or default
+    if reranker_max_concurrent is None:
+        reranker_max_concurrent = int(os.getenv("RERANKER_MAX_CONCURRENT", "10"))
+
     pipeline = Pipeline()
 
     # Add retrievers
@@ -111,11 +121,16 @@ def create_generation_pipeline(
         DocumentJoiner(join_mode="reciprocal_rank_fusion"),
     )
 
-    # Add LLM reranker
+    # Add LLM reranker with parallel scoring
     pipeline.add_component(
         "reranker",
-        LLMReranker(llm_client=llm_client, top_k=rerank_top_k),
+        LLMReranker(
+            llm_client=llm_client,
+            top_k=rerank_top_k,
+            max_concurrent=reranker_max_concurrent,
+        ),
     )
+    logger.info(f"LLMReranker configured with max_concurrent={reranker_max_concurrent}")
 
     # Add context assembler
     pipeline.add_component(
@@ -148,6 +163,7 @@ def run_generation(
     rerank_top_k: int = 5,
     max_context_tokens: int = 6000,
     source_tracker: Optional[SourceTracker] = None,
+    embedding_adapter: Optional[EmbeddingAdapter] = None,
 ) -> Dict[str, Any]:
     """
     Run the Q&A generation pipeline.
@@ -160,14 +176,26 @@ def run_generation(
         rerank_top_k: Number of docs after reranking
         max_context_tokens: Maximum context tokens
         source_tracker: Optional source tracker
+        embedding_adapter: Optional EmbeddingAdapter for query embedding
+                          (uses global singleton if not provided - ensures
+                          same model as indexing)
 
     Returns:
         Dictionary with 'answer', 'sources', 'confidence', and 'statistics'
     """
-    # Create query embedding
+    # Create query embedding using the same adapter used for indexing
     from .indexing import create_query_embedding
 
-    query_embedding = create_query_embedding(query)
+    # Use provided adapter or get global singleton
+    if embedding_adapter is None:
+        embedding_adapter = get_embedding_adapter()
+
+    logger.info(
+        f"Using embedding adapter for query: model={embedding_adapter.model}, "
+        f"dimensions={embedding_adapter.dimensions}"
+    )
+
+    query_embedding = create_query_embedding(query, embedding_adapter=embedding_adapter)
 
     pipeline = create_generation_pipeline(
         document_store=document_store,

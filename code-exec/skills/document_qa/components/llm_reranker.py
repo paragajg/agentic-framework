@@ -10,6 +10,7 @@ Uses LLM adapters for provider-agnostic LLM calls.
 Configuration from .env (OPENAI_MODEL, ANTHROPIC_MODEL, etc.) with runtime overrides.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -80,6 +81,7 @@ Respond with ONLY a JSON array:
         batch_size: int = 5,
         min_score: float = 1.0,
         max_retries: int = 2,
+        max_concurrent: int = 10,
     ):
         """
         Initialize the LLM Reranker.
@@ -90,12 +92,14 @@ Respond with ONLY a JSON array:
             batch_size: Number of documents to score in one LLM call
             min_score: Minimum score to include in results (default: 1.0)
             max_retries: Maximum retries on API failure
+            max_concurrent: Maximum concurrent LLM calls for parallel scoring (default: 10)
         """
         self.llm_client = llm_client
         self.top_k = top_k
         self.batch_size = batch_size
         self.min_score = min_score
         self.max_retries = max_retries
+        self.max_concurrent = max_concurrent
 
         # Statistics
         self._total_scored = 0
@@ -248,13 +252,146 @@ Respond with ONLY a JSON array:
     def _score_individually(
         self, query: str, documents: List[Document]
     ) -> List[Tuple[Document, float, str]]:
-        """Score documents individually (fallback when batch fails)."""
+        """
+        Score documents individually with parallel async execution.
+
+        Uses asyncio to score multiple documents concurrently with rate limiting.
+        Falls back to synchronous scoring if async fails.
+        """
+        try:
+            # Try async parallel scoring first
+            logger.info(f"Starting parallel scoring for {len(documents)} documents (max_concurrent={self.max_concurrent})...")
+            return asyncio.run(self._score_individually_async(query, documents))
+        except Exception as e:
+            logger.warning(f"Async parallel scoring failed: {e}. Falling back to sequential scoring.")
+            # Fallback to sequential scoring
+            return self._score_individually_sync(query, documents)
+
+    def _score_individually_sync(
+        self, query: str, documents: List[Document]
+    ) -> List[Tuple[Document, float, str]]:
+        """Score documents individually (synchronous fallback)."""
         results = []
         for doc in documents:
             score, reason = self._score_single(query, doc)
             results.append((doc, score, reason))
             self._total_scored += 1
         return results
+
+    async def _score_individually_async(
+        self, query: str, documents: List[Document]
+    ) -> List[Tuple[Document, float, str]]:
+        """
+        Score documents individually with async parallel execution.
+
+        Uses semaphore for rate limiting to avoid overwhelming the API.
+        """
+        import time
+
+        start_time = time.time()
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+
+        async def score_with_semaphore(doc: Document, index: int) -> Tuple[Document, float, str, int]:
+            async with semaphore:
+                score, reason = await self._score_single_async(query, doc)
+                return (doc, score, reason, index)
+
+        # Create tasks for all documents
+        tasks = [score_with_semaphore(doc, i) for i, doc in enumerate(documents)]
+
+        # Execute with progress tracking
+        results_with_index = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results and handle exceptions
+        results = []
+        for item in results_with_index:
+            if isinstance(item, Exception):
+                logger.error(f"Async scoring task failed: {item}")
+                # Use neutral score for failed items
+                results.append((documents[0], 5.0, "async_failed", 0))  # Will be sorted out below
+            else:
+                results.append(item)
+
+        # Sort by original index to maintain order
+        results.sort(key=lambda x: x[3])
+
+        # Remove index and update stats
+        final_results = []
+        for doc, score, reason, _ in results:
+            final_results.append((doc, score, reason))
+            self._total_scored += 1
+
+        elapsed = time.time() - start_time
+        logger.info(
+            f"Parallel scoring complete: {len(documents)} documents in {elapsed:.1f}s "
+            f"({len(documents)/elapsed:.1f} docs/sec)"
+        )
+
+        return final_results
+
+    async def _score_single_async(self, query: str, document: Document) -> Tuple[float, str]:
+        """Score a single document asynchronously."""
+        passage = document.content[:1500]  # Limit passage length
+
+        prompt = self.RERANK_PROMPT.format(
+            query=query,
+            passage=passage,
+        )
+
+        try:
+            response = await self._call_llm_async(prompt)
+            self._llm_calls += 1
+
+            # Parse JSON response
+            score, reason = self._parse_score_response(response)
+            return score, reason
+
+        except Exception as e:
+            logger.warning(f"Failed to score document: {e}")
+            self._failed_scores += 1
+            # Use neutral score (5.0) instead of 0.0 so document isn't filtered out
+            return 5.0, "scoring_failed_neutral"
+
+    async def _call_llm_async(self, prompt: str) -> str:
+        """
+        Call the LLM asynchronously using adapter factory.
+
+        Uses asyncio to make non-blocking API calls.
+        """
+        import time
+
+        last_error = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                # Run synchronous LLM call in thread pool to avoid blocking
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self._call_llm_sync(prompt)
+                )
+                return response
+
+            except Exception as e:
+                last_error = e
+                self._failed_scores += 1
+
+                if attempt < self.max_retries:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(
+                        f"LLM call failed (attempt {attempt + 1}/{self.max_retries + 1}): {e}. "
+                        f"Retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"LLM call failed after {self.max_retries + 1} attempts: {e}")
+
+        raise last_error
+
+    def _call_llm_sync(self, prompt: str) -> str:
+        """Synchronous LLM call (for use in thread pool)."""
+        adapter = create_sync_adapter()
+        return adapter.complete_text(prompt, temperature=0, max_tokens=200)
 
     def _call_llm(self, prompt: str) -> str:
         """
@@ -384,6 +521,7 @@ def rerank_documents(
     query: str,
     documents: List[Document],
     top_k: int = 5,
+    max_concurrent: int = 10,
 ) -> List[Document]:
     """
     Convenience function to rerank documents.
@@ -392,10 +530,11 @@ def rerank_documents(
         query: Query to rank against
         documents: Documents to rerank
         top_k: Number of top documents to return
+        max_concurrent: Maximum concurrent LLM calls for parallel scoring
 
     Returns:
         Reranked documents
     """
-    reranker = LLMReranker(top_k=top_k)
+    reranker = LLMReranker(top_k=top_k, max_concurrent=max_concurrent)
     result = reranker.run(query=query, documents=documents)
     return result["documents"]
