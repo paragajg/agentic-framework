@@ -219,6 +219,47 @@ class AgenticExecutor:
             skill_selection_query, max_results=5
         )
 
+        # Auto-include document_qa when document files are attached
+        document_extensions = {'.pdf', '.ppt', '.pptx', '.doc', '.docx', '.xls', '.xlsx'}
+        has_document_files = False
+        if attached_files:
+            has_document_files = any(
+                Path(f).suffix.lower() in document_extensions
+                for f in attached_files.keys()
+            )
+
+        if has_document_files:
+            # CRITICAL: When PDFs/documents are attached, document_qa MUST be the primary skill
+            # Find document_qa in the list or get it from registry
+            doc_qa_cap = None
+            doc_qa_index = None
+
+            # Check if document_qa is already in the list
+            for i, c in enumerate(relevant_caps):
+                if c.name in ('document_qa', 'document-qa'):
+                    doc_qa_cap = c
+                    doc_qa_index = i
+                    break
+
+            # If not in list, get it from registry
+            if not doc_qa_cap:
+                doc_qa_cap = self._agent_core.capability_registry.get('document_qa')
+                if not doc_qa_cap:
+                    doc_qa_cap = self._agent_core.capability_registry.get('document-qa')
+
+            # Ensure document_qa is at position 0 (primary skill)
+            if doc_qa_cap:
+                if doc_qa_index is not None:
+                    # Already in list - move to position 0 if not already there
+                    if doc_qa_index != 0:
+                        relevant_caps.pop(doc_qa_index)
+                        relevant_caps.insert(0, doc_qa_cap)
+                        progress_messages.append("[Prioritized document_qa for document files]")
+                else:
+                    # Not in list - add at position 0
+                    relevant_caps.insert(0, doc_qa_cap)
+                    progress_messages.append("[Auto-added document_qa for attached documents]")
+
         if relevant_caps:
             skills_text = ", ".join(c.name for c in relevant_caps[:3])
             progress_messages.append(f"[Skills selected: {skills_text}]")
@@ -233,7 +274,8 @@ class AgenticExecutor:
 
         # Build skill guidance to inject into the query
         # Use original query for intent detection in skill guidance
-        skill_guidance = self._build_skill_guidance(relevant_caps, skill_selection_query)
+        # Pass attached_files so guidance can include document paths for document_qa
+        skill_guidance = self._build_skill_guidance(relevant_caps, skill_selection_query, attached_files)
 
         # Convert selected skills to OpenAI tool format
         skill_tools = self._convert_skills_to_tools(relevant_caps)
@@ -302,12 +344,13 @@ class AgenticExecutor:
         self,
         relevant_caps: List[Any],
         query: str,
+        attached_files: Optional[Dict[str, str]] = None,
     ) -> str:
         """
         Build skill guidance to inject into the query.
 
         This provides the LLM with context about which skills are most
-        appropriate for this task.
+        appropriate for this task, including attached file information.
         """
         if not relevant_caps:
             return ""
@@ -327,12 +370,38 @@ class AgenticExecutor:
         intents = registry.detect_intents(query)
         extensions = registry.detect_file_extensions(query)
 
-        if extensions and any(ext in ['.pdf', '.docx', '.xlsx'] for ext in extensions):
-            if any(intent in ['extract', 'analyze', 'summarize'] for intent in intents):
-                lines.append("\n[IMPORTANT] For document extraction, use the document_qa approach with semantic search.")
+        # Detect document files from attached files
+        document_extensions = {'.pdf', '.ppt', '.pptx', '.doc', '.docx', '.xls', '.xlsx'}
+        attached_documents = []
 
-        if any(intent in ['research', 'search'] for intent in intents):
-            lines.append("\n[IMPORTANT] For web research, use web_search or deep_research to find current information.")
+        if attached_files:
+            for file_path in attached_files.keys():
+                path = Path(file_path)
+                if path.suffix.lower() in document_extensions:
+                    attached_documents.append(str(path))
+
+        # If we have attached documents, add explicit guidance
+        has_document_qa = any(cap.name in ('document_qa', 'document-qa') for cap in relevant_caps)
+
+        if attached_documents:
+            lines.append("\n[ATTACHED DOCUMENTS FOR ANALYSIS]")
+            lines.append("The following documents are attached and ready for analysis:")
+            for doc in attached_documents[:5]:
+                lines.append(f"  - {doc}")
+
+            if has_document_qa:
+                lines.append("\n[CRITICAL] When calling document_qa, use these EXACT file paths in the 'documents' parameter.")
+            else:
+                # Document_qa not selected but documents attached - add strong guidance
+                lines.append("\n[IMPORTANT] To extract information from these documents, use the document_qa skill.")
+                lines.append("The document_qa skill handles chunking and semantic search for large documents.")
+
+        if extensions and any(ext in ['.pdf', '.docx', '.xlsx', '.pptx'] for ext in extensions):
+            if any(intent in ['extract', 'analyze', 'summarize', 'review'] for intent in intents):
+                lines.append("\n[IMPORTANT] For document extraction/analysis, use document_qa with semantic search.")
+
+        if any(intent in ['research', 'search', 'updated', 'latest', 'current'] for intent in intents):
+            lines.append("\n[IMPORTANT] For current/updated information, use deep_research or web_search.")
 
         return "\n".join(lines)
 

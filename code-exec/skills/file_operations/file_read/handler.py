@@ -51,6 +51,28 @@ def read_file(
             "truncated": False,
         }
 
+    # CRITICAL: Check for binary documents (PDF, DOCX, etc.)
+    # These should NOT be read as UTF-8 text - use document_qa instead
+    binary_extensions = {'.pdf', '.docx', '.xlsx', '.pptx', '.doc', '.xls', '.ppt'}
+    file_extension = path.suffix.lower()
+
+    if file_extension in binary_extensions:
+        return {
+            "content": f"ERROR: Cannot read binary document as text.\n\n"
+                      f"File: {path.name}\n"
+                      f"Type: {file_extension.upper()[1:]} document\n\n"
+                      f"This is a binary document that should be processed with the document_qa skill, "
+                      f"not file_read. The document_qa skill has proper PDF/DOCX/XLSX extraction capabilities.\n\n"
+                      f"Please use: document_qa(documents=[\"{file_path}\"], query=\"your question here\")",
+            "file_exists": True,
+            "total_lines": 0,
+            "lines_read": 0,
+            "file_size_bytes": path.stat().st_size,
+            "truncated": False,
+            "error": "binary_document",
+            "suggested_skill": "document_qa",
+        }
+
     try:
         # Read file with error handling for encoding issues
         with open(path, "r", encoding="utf-8", errors="replace") as f:
